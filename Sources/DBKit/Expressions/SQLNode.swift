@@ -6,6 +6,7 @@ public indirect enum SQLNode: Sendable {
     /// SQL text emitted verbatim. Only ever built from DBKit's fixed keywords and identifiers.
     case raw(String)
     case sequence([SQLNode])
+    case subquery(SelectStatement)
 
     static func function(_ name: String, _ arguments: [SQLNode]) -> SQLNode {
         var parts: [SQLNode] = [.raw("\(name)(")]
@@ -56,6 +57,7 @@ public indirect enum SQLNode: Sendable {
 
 /// A model column.
 public struct ColumnReference: Sendable {
+    /// The qualifier: the model's table, or the alias of a ``ModelAlias``.
     let table: String
     let name: String
 }

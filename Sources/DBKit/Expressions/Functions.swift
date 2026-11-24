@@ -136,6 +136,14 @@ public enum SQL {
         return RowValue(nodes: nodes)
     }
 
+    // MARK: Subqueries
+
+    /// `EXISTS (subquery)`, a predicate that is never NULL. Columns of an enclosing query's model inside the subquery
+    /// refer to that query's row.
+    public static func exists(_ subquery: some SelectQuery) -> Expr<Bool> {
+        Expr(.sequence([.raw("EXISTS "), .subquery(subquery.statement)]))
+    }
+
     // MARK: Aggregates
 
     /// `COUNT(expression)`: counts non-null values.

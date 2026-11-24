@@ -1,6 +1,8 @@
-/// The untyped parts of a `SELECT`, shared by model queries and projections.
+/// The untyped parts of a `SELECT`, shared by model queries, projections and subqueries.
 public struct SelectStatement: Sendable {
     var table: String
+    /// The name the table goes by in this `SELECT` (`FROM "table" AS "alias"`), set by ``ModelAlias/query()``.
+    var alias: String?
     /// Projected expressions; `nil` selects `"table".*`.
     var items: [SelectItem]?
     /// Expressions selected after `"table".*`, e.g. the parent key of a many-to-many load.
@@ -41,7 +43,7 @@ struct JoinedLoad: Sendable {
     let nested: [JoinedLoad]
 }
 
-/// Renders statements to SQL, numbering bind placeholders.
+/// Renders statements to SQL, numbering bind placeholders across subqueries.
 final class SQLRenderer {
     private(set) var binds: [Bind] = []
 
@@ -58,11 +60,14 @@ final class SQLRenderer {
             return sql
         case .sequence(let nodes):
             return nodes.map { render($0) }.joined()
+        case .subquery(let statement):
+            return "(\(renderSelect(statement, eagerJoins: [])))"
         }
     }
 
     func renderSelect(_ statement: SelectStatement, eagerJoins: [JoinedLoad]) -> String {
-        let scope = JoinScope(base: statement.table)
+        let base = statement.alias ?? statement.table
+        let scope = JoinScope(base: base)
         for join in statement.joins {
             switch join {
             case .relation(let relation, let kind): _ = scope.alias(for: relation.path, kind: kind, renderer: self)
@@ -74,7 +79,7 @@ final class SQLRenderer {
         if let items = statement.items {
             columns = items.map { renderItem($0) }
         } else {
-            columns = ["\(quoted(statement.table)).*"] + statement.extraItems.map { renderItem($0) }
+            columns = ["\(quoted(base)).*"] + statement.extraItems.map { renderItem($0) }
             columns += eagerColumns(eagerJoins, path: [], prefix: "", in: scope)
         }
 
@@ -95,7 +100,8 @@ final class SQLRenderer {
         if let limit = statement.limit { clauses.append("LIMIT \(limit)") }
         if let offset = statement.offset { clauses.append("OFFSET \(offset)") }
 
-        let head = "SELECT \(statement.distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(quoted(statement.table))"
+        let from = statement.alias.map { "\(quoted(statement.table)) AS \(quoted($0))" } ?? quoted(statement.table)
+        let head = "SELECT \(statement.distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(from)"
         return ([head] + scope.joins + clauses).joined(separator: " ")
     }
 

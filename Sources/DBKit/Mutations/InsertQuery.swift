@@ -87,6 +87,14 @@ public struct UpdateQuery<Row: Model>: Sendable where Row.Base == Row {
         filtered(predicate.sqlNode)
     }
 
+    public func whereExists(_ subquery: some SelectQuery) -> Self {
+        filtered(.sequence([.raw("EXISTS "), .subquery(subquery.statement)]))
+    }
+
+    public func whereNotExists(_ subquery: some SelectQuery) -> Self {
+        filtered(.sequence([.raw("NOT EXISTS "), .subquery(subquery.statement)]))
+    }
+
     public func returningAll() -> Returning<Row> { Returning(statement: statement) }
 
     /// Runs the update and returns the number of updated rows.
@@ -128,6 +136,14 @@ public struct DeleteQuery<Row: Model>: Sendable where Row.Base == Row {
 
     public func filter<P: SQLExpression>(_ predicate: P) -> Self where P.Value.NonNull == Bool {
         filtered(predicate.sqlNode)
+    }
+
+    public func whereExists(_ subquery: some SelectQuery) -> Self {
+        filtered(.sequence([.raw("EXISTS "), .subquery(subquery.statement)]))
+    }
+
+    public func whereNotExists(_ subquery: some SelectQuery) -> Self {
+        filtered(.sequence([.raw("NOT EXISTS "), .subquery(subquery.statement)]))
     }
 
     public func returningAll() -> Returning<Row> { Returning(statement: statement) }

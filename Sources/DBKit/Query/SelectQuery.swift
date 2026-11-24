@@ -15,6 +15,15 @@ extension SelectQuery {
         return filter(predicate)
     }
 
+    /// `WHERE EXISTS (subquery)`. Columns of this query's model inside the subquery correlate with the outer row.
+    public func whereExists(_ subquery: some SelectQuery) -> Self {
+        filtered(.sequence([.raw("EXISTS "), .subquery(subquery.statement)]))
+    }
+
+    public func whereNotExists(_ subquery: some SelectQuery) -> Self {
+        filtered(.sequence([.raw("NOT EXISTS "), .subquery(subquery.statement)]))
+    }
+
     public func orderBy(_ orders: OrderBy...) -> Self {
         updating { $0.orderBy += orders }
     }
