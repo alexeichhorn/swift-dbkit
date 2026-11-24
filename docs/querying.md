@@ -90,6 +90,27 @@ With any join, `join`, `leftJoin` or a `.joined` load, the lock is scoped to the
 (`FOR UPDATE OF "users"`), or to its alias (`FOR UPDATE OF "author"`), so joined rows stay unlocked. PostgreSQL
 rejects locks combined with `DISTINCT` or `GROUP BY`.
 
+## Count / Exists / Pagination
+
+```swift
+let total = try await UserModel.query().count(on: db)
+let exists = try await UserModel.query().filter(UserModel.email == "a@b.com").exists(on: db)
+
+let page = try await UserModel.query()
+    .orderBy(UserModel.id.asc)
+    .paginate(page: 1, perPage: 20, on: db)
+print("page \(page.page) of \(page.totalPages), \(total) users, exists: \(exists)")
+```
+
+`count`, `exists` and the total of `paginate` ignore the query's own ordering, limit, offset and lock, so
+`query.limit(1).count(on: db)` counts every matching row. A model query keeps its joins, including those of `.joined`
+loads and relation paths, and counts each of its rows once: `UserModel.query().join(\.todos).count(on: db)` counts
+users with a todo, not todos. With a joined to-many load, the page's `LIMIT` still applies to the joined rows (see
+[Select-In vs Joined](relations.md#select-in-vs-joined)). A projection counts the rows it returns, so
+`UserModel.query().join(\.todos).select(UserModel.name)` counts one row per todo.
+
+`page` is 1-based, and a page or `perPage` below 1 traps.
+
 ## Correlated EXISTS / NOT EXISTS
 
 Columns of the outer model inside a subquery refer to the outer row:
