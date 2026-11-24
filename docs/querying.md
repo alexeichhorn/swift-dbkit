@@ -49,10 +49,15 @@ let rendered = todos.render()
 ## Row-Value Filters
 
 ```swift
+enum LookupScope: String, DatabaseEnum {
+    static let typeName = "lookup_scope"
+    case `public`, `internal`
+}
+
 @Model(table: "lookup_rows")
 class LookupRowModel {
     @Key @AutoIncrement var id: Int64
-    var scope: String
+    var scope: LookupScope
     var externalKey: String
     var locale: String?
 }
@@ -62,8 +67,8 @@ class LookupRowModel {
 let rows = try await LookupRowModel.query()
     .filter(
         SQL.row(LookupRowModel.scope, LookupRowModel.externalKey, LookupRowModel.locale).in([
-            ("public", "alpha", "en"),
-            ("internal", "beta", nil),
+            (.public, "alpha", "en"),
+            (.internal, "beta", nil),
         ])
     )
     .all(on: db)
@@ -72,7 +77,7 @@ let rows = try await LookupRowModel.query()
 `SQL.row` takes two to six columns. Each tuple value has its column's type, so a wrong type or tuple length doesn't
 compile, an integer literal takes its column's integer type, and a nullable column takes an optional or `nil`, rendered
 `NULL`. `in` is `Expr<Bool?>` when a column is nullable and `Expr<Bool>` otherwise. A row containing NULL never
-matches, since PostgreSQL compares it as NULL: the `("internal", "beta", nil)` row above matches nothing. `in` with an
+matches, since PostgreSQL compares it as NULL: the `(.internal, "beta", nil)` row above matches nothing. `in` with an
 empty array matches nothing.
 
 ## Streaming

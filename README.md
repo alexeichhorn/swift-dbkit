@@ -110,6 +110,15 @@ try await user.delete(on: db)
 
 Use the `update()` / `delete()` builders for bulk or conditional mutations.
 
+## Postgres Enums
+
+`@DatabaseEnum` stores a plain enum as a PostgreSQL enum type. Each label is the snake_case case name:
+
+```swift
+@DatabaseEnum("task_state")
+enum TaskState { case pendingReview, inProgress, completed }   // pending_review, in_progress, completed
+```
+
 ## More Docs
 
 - [Querying](docs/querying.md)
