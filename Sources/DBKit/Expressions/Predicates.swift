@@ -1,6 +1,6 @@
 extension SQLExpression {
-    public var isNull: Expr<Bool> { Expr(.sequence([sqlNode, .raw(" IS NULL")])) }
-    public var isNotNull: Expr<Bool> { Expr(.sequence([sqlNode, .raw(" IS NOT NULL")])) }
+    public var isNull: Expr<Bool> { Expr(.nullCheck(sqlNode, "IS NULL")) }
+    public var isNotNull: Expr<Bool> { Expr(.nullCheck(sqlNode, "IS NOT NULL")) }
 
     /// `IN (…)`; an empty list matches nothing.
     public func `in`(_ values: [Value]) -> Expr<Value.AsBool> {
@@ -14,6 +14,24 @@ extension SQLExpression {
 
     public func between(_ lower: Value, _ upper: Value) -> Expr<Value.AsBool> {
         Expr(.sequence([sqlNode, .raw(" BETWEEN "), lower.sqlNode, .raw(" AND "), upper.sqlNode]))
+    }
+
+    /// NULL-safe inequality: `IS DISTINCT FROM`. Accepts `nil` for nullable expressions.
+    public func isDistinct(from value: Value) -> Expr<Bool> {
+        Expr(.comparison(sqlNode, "IS DISTINCT FROM", value.sqlNode))
+    }
+
+    public func isDistinct<Other: SQLExpression>(from other: Other) -> Expr<Bool> where Other.Value.NonNull == Value.NonNull {
+        Expr(.comparison(sqlNode, "IS DISTINCT FROM", other.sqlNode))
+    }
+
+    /// NULL-safe equality: `IS NOT DISTINCT FROM`. Accepts `nil` for nullable expressions.
+    public func isNotDistinct(from value: Value) -> Expr<Bool> {
+        Expr(.comparison(sqlNode, "IS NOT DISTINCT FROM", value.sqlNode))
+    }
+
+    public func isNotDistinct<Other: SQLExpression>(from other: Other) -> Expr<Bool> where Other.Value.NonNull == Value.NonNull {
+        Expr(.comparison(sqlNode, "IS NOT DISTINCT FROM", other.sqlNode))
     }
 }
 

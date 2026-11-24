@@ -21,6 +21,28 @@ public indirect enum SQLNode: Sendable {
         parenthesized ? .sequence([.raw("("), lhs, .raw(" \(op) "), rhs, .raw(")")]) : .sequence([lhs, .raw(" \(op) "), rhs])
     }
 
+    /// `lhs op rhs` for a comparison operator, bare on its own. PostgreSQL's comparisons don't chain: `a = b > c` is a
+    /// syntax error and `a = b IS NULL` reads as `(a = b) IS NULL`. So an operand that is a comparison is parenthesized.
+    static func comparison(_ lhs: SQLNode, _ op: String, _ rhs: SQLNode) -> SQLNode {
+        .sequence([lhs.parenthesizedIfComparison, .raw(" \(op) "), rhs.parenthesizedIfComparison])
+    }
+
+    /// `operand IS NULL` or `operand IS NOT NULL`, a comparison like those of `comparison(_:_:_:)`.
+    static func nullCheck(_ operand: SQLNode, _ check: String) -> SQLNode {
+        .sequence([operand.parenthesizedIfComparison, .raw(" \(check)")])
+    }
+
+    /// The operator texts `comparison(_:_:_:)` and `nullCheck(_:_:)` put second in their sequence.
+    private static let comparisonOperators: Set<String> = [
+        " = ", " <> ", " < ", " <= ", " > ", " >= ", " IS DISTINCT FROM ", " IS NOT DISTINCT FROM ", " IS NULL", " IS NOT NULL",
+    ]
+
+    private var parenthesizedIfComparison: SQLNode {
+        guard case .sequence(let parts) = self, parts.count > 1, case .raw(let op) = parts[1], Self.comparisonOperators.contains(op)
+        else { return self }
+        return .sequence([.raw("("), self, .raw(")")])
+    }
+
     static func list(_ nodes: [SQLNode]) -> SQLNode {
         var parts: [SQLNode] = [.raw("(")]
         for (index, node) in nodes.enumerated() {
