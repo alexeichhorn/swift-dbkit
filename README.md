@@ -60,7 +60,7 @@ Property names starting with `__dbkit_` are reserved for the code `@Model` gener
 
 Required and nullable columns stay distinct: `nil` and optional values are accepted only where the property is
 optional, and a comparison is nullable when an operand is (`Expr<Bool?>` instead of `Expr<Bool>`). Comparing a column
-with a value of another type doesn't compile.
+with a value or column of another type doesn't compile.
 
 ## Common Mutations
 

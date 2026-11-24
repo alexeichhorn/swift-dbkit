@@ -27,10 +27,11 @@ let articles = try await ArticleModel.query()
 
 A comparison is nullable when an operand is, as in PostgreSQL, where comparing with NULL gives NULL. On a nullable
 column, `==`, `!=`, `<`, `<=`, `>`, `>=`, `between`, `like`, `ilike`, `in` and `notIn` are `Expr<Bool?>`; on a
-required column they are `Expr<Bool>`. `&&` and `||` are `Expr<Bool?>` when either operand is, and `!` keeps its
-operand's type. Only `isNull` and `isNotNull` are never NULL, so they stay `Expr<Bool>`. `filter` takes both kinds
-and keeps the rows where the predicate is true, so a NULL drops the row: `!(ArticleModel.subtitle == "Swift")` skips
-articles without a subtitle.
+required column they are `Expr<Bool>`. Between two expressions, a comparison is `Expr<Bool?>` when either one is
+nullable. `&&` and `||` are `Expr<Bool?>` when either operand is, and `!` keeps its operand's type. Only `isNull`,
+`isNotNull`, `isDistinct(from:)` and `isNotDistinct(from:)` are never NULL, so they stay `Expr<Bool>`. `filter`
+takes both kinds and keeps the rows where the predicate is true, so a NULL drops the row:
+`!(ArticleModel.subtitle == "Swift")` skips articles without a subtitle.
 
 A nullable column takes its optional type wherever it takes a value: plain values, optionals and `nil`. `== nil` and
 `!= nil` compile to `IS NULL` / `IS NOT NULL`, and so does `==` / `!=` with an optional that is `nil` at run time. The
