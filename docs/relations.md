@@ -113,8 +113,28 @@ also serves a `.joined` load or an explicit `.join(...)` of the same relation. A
 like `"members.manager"`.
 
 Path columns are nullable (`Expr<String?>` for a `String` column) because the outer join can find no row, so
-`TodoModel.Relations.user.id.isNull` finds todos without a user. Paths are read-only and only supported in `SELECT` queries;
-to-many relations aren't paths (use `.join(...)` or `whereExists(...)`).
+`TodoModel.Relations.user.id.isNull` finds todos without a user. Paths are read-only; to-many relations aren't paths (use
+`.join(...)` or `whereExists(...)`).
+
+A path also works inside a `whereExists` / `SQL.exists` subquery, where it joins in the subquery, and in the condition
+of a custom `join(_:on:)`. A subquery's path join never takes a name the enclosing query uses, so a plain column of the
+outer model still means the outer row:
+
+```swift
+// Users who share their name with the user of a "Launch" todo. The todo's user joins as "todos.user",
+// so `UserModel.name` stays the outer user's name.
+let namesakes = try await UserModel.query()
+    .whereExists(
+        TodoModel.query()
+            .filter(TodoModel.title == "Launch")
+            .filter(TodoModel.Relations.user.name == UserModel.name)
+    )
+    .all(on: db)
+```
+
+A plain column in a subquery refers to the subquery's own table or custom join of that model, else to the nearest
+enclosing query that has the model as its table, a custom join or its only relation join, else to the subquery's own
+relation join of it. So it can correlate with an outer `.join(...)` or path join too. Paths are only supported in `SELECT` queries and their subqueries, not in a mutation's own clauses.
 
 ## Nested Eager Loading
 
