@@ -123,6 +123,105 @@ import Testing
         }
     }
 
+    @Test func selectinHasManyLoadsChildren() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Riley", email: "r@b.com")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Write tests")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Ship code")
+
+            let users: [UserModel.Loaded<[TodoModel]>] = try await UserModel.query()
+                .filter(UserModel.id == user.id)
+                .with(\.todos)
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users[0].todos.map(\.title).sorted() == ["Ship code", "Write tests"])
+        }
+    }
+
+    @Test func selectinBelongsToLoadsParent() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Dana", email: "d@b.com")
+            let todo = try await seedTodo(on: tx, userID: user.id, title: "Map relations")
+
+            let todos: [TodoModel.Loaded<UserModel?, NotLoaded>] = try await TodoModel.query()
+                .filter(TodoModel.id == todo.id)
+                .with(\.user)
+                .all(on: tx)
+
+            #expect(todos.count == 1)
+            let loaded = try #require(todos[0].user)
+            #expect(loaded.id == user.id)
+            #expect(loaded.email == "d@b.com")
+        }
+    }
+
+    @Test func nestedSelectinLoads() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Jo", email: "jo@b.com")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Chain loads")
+
+            let users: [UserModel.Loaded<[TodoModel.Loaded<UserModel?, NotLoaded>]>] = try await UserModel.query()
+                .filter(UserModel.id == user.id)
+                .with(\.todos) { $0.with(\.user) }
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users[0].todos.count == 1)
+            let nestedUser = try #require(users[0].todos[0].user)
+            #expect(nestedUser.id == user.id)
+        }
+    }
+
+    @Test func manyToManySelectinLoadsChildren() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Tagger", email: "tagger@db.com")
+            let todo1 = try await seedTodo(on: tx, userID: user.id, title: "First")
+            let todo2 = try await seedTodo(on: tx, userID: user.id, title: "Second")
+            let tagA = try await seedTag(on: tx, name: "A")
+            let tagB = try await seedTag(on: tx, name: "B")
+            try await seedTodoTag(on: tx, todoID: todo1.id, tagID: tagA.id)
+            try await seedTodoTag(on: tx, todoID: todo1.id, tagID: tagB.id)
+            try await seedTodoTag(on: tx, todoID: todo2.id, tagID: tagB.id)
+
+            let todos: [TodoModel.Loaded<NotLoaded, [TagModel]>] = try await TodoModel.query()
+                .filter(TodoModel.userID == user.id)
+                .with(\.tags)
+                .all(on: tx)
+
+            #expect(todos.count == 2)
+            let tags1 = try #require(todos.first { $0.id == todo1.id }).tags
+            #expect(tags1.map(\.name).sorted() == ["A", "B"])
+            let tags2 = try #require(todos.first { $0.id == todo2.id }).tags
+            #expect(tags2.map(\.name).sorted() == ["B"])
+        }
+    }
+
+    @Test func manyToManySelectinReverseLoadsParents() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Tagger", email: "tagger2@db.com")
+            let todo1 = try await seedTodo(on: tx, userID: user.id, title: "First")
+            let todo2 = try await seedTodo(on: tx, userID: user.id, title: "Second")
+            let tagA = try await seedTag(on: tx, name: "A")
+            let tagB = try await seedTag(on: tx, name: "B")
+            try await seedTodoTag(on: tx, todoID: todo1.id, tagID: tagA.id)
+            try await seedTodoTag(on: tx, todoID: todo1.id, tagID: tagB.id)
+            try await seedTodoTag(on: tx, todoID: todo2.id, tagID: tagB.id)
+
+            let tags: [TagModel.Loaded<[TodoModel]>] = try await TagModel.query().with(\.todos).all(on: tx)
+
+            let todosA = try #require(tags.first { $0.id == tagA.id }).todos
+            #expect(todosA.map(\.title).sorted() == ["First"])
+            let todosB = try #require(tags.first { $0.id == tagB.id }).todos
+            #expect(todosB.map(\.title).sorted() == ["First", "Second"])
+        }
+    }
+
     @Test func activeInsertRoundtrip() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -2269,6 +2368,14 @@ import Testing
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.
 private func setupSchema(on tx: Transaction) async throws {
     try await tx.query("CREATE TEMP TABLE users (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, region TEXT)")
+    try await tx.query(
+        """
+        CREATE TEMP TABLE todos (
+            id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, title TEXT NOT NULL, note TEXT, is_complete BOOLEAN NOT NULL DEFAULT false
+        )
+        """)
+    try await tx.query("CREATE TEMP TABLE tags (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL)")
+    try await tx.query("CREATE TEMP TABLE todo_tags (todo_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, PRIMARY KEY (todo_id, tag_id))")
     try await tx.query("CREATE TEMP TABLE nullable_rows (id BIGSERIAL PRIMARY KEY, note TEXT NULL)")
     try await tx.query(
         "CREATE TEMP TABLE order_lines (order_id BIGINT NOT NULL, line_id BIGINT NOT NULL, note TEXT NOT NULL, PRIMARY KEY (order_id, line_id))"
@@ -2305,6 +2412,18 @@ private func seedTextSample(on tx: Transaction, label: String, body: String?) as
 
 private func seedUser(on tx: Transaction, name: String, email: String) async throws -> UserModel {
     try #require(try await UserModel.insert(UserModel.Insert(name: name, email: email)).returningAll().first(on: tx))
+}
+
+private func seedTodo(on tx: Transaction, userID: Int64, title: String) async throws -> TodoModel {
+    try #require(try await TodoModel.insert(TodoModel.Insert(userID: userID, title: title)).returningAll().first(on: tx))
+}
+
+private func seedTag(on tx: Transaction, name: String) async throws -> TagModel {
+    try #require(try await TagModel.insert(TagModel.Insert(name: name)).returningAll().first(on: tx))
+}
+
+private func seedTodoTag(on tx: Transaction, todoID: Int64, tagID: Int64) async throws {
+    try await TodoTagModel.insert(TodoTagModel.Insert(todoID: todoID, tagID: tagID)).execute(on: tx)
 }
 
 private func seedNullableRow(on tx: Transaction, note: String?) async throws -> NullableRowModel {

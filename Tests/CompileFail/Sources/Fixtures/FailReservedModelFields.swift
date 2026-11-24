@@ -29,4 +29,14 @@ class ReservedKeyModel {
     @Key var __dbkit_id: Int64  // error: names starting with `__dbkit_` are reserved for DBKit internals
 }
 
-// Waits for slice 17: a reserved relation name, `@BelongsTo(key: "ownerID") var __dbkit_owner: TargetModel?`.
+@Model(table: "targets")
+class TargetModel {
+    @Key var id: Int64
+}
+
+@Model(table: "reserved_relations")
+class ReservedRelationModel {
+    @Key var id: Int64
+    var ownerID: Int64
+    @BelongsTo(key: "ownerID") var __dbkit_owner: TargetModel?  // error: names starting with `__dbkit_` are reserved for DBKit internals
+}

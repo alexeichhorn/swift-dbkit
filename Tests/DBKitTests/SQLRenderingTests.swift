@@ -42,6 +42,34 @@ class LeaseModel {
         #expect(rendered.binds.map(\.description) == ["7", "%milk%"])
     }
 
+    @Test func eagerLoadingChangesTheRowType() {
+        let users: Query<UserModel.Loaded<[TodoModel.Loaded<NotLoaded, [TagModel]>]>> = UserModel.query().with(\.todos) { $0.with(\.tags) }
+        let todos: Query<TodoModel.Loaded<UserModel.Loaded<[TodoModel]>?, NotLoaded>> = TodoModel.query().with(\.user) { $0.with(\.todos) }
+        // Waits for slice 18: `both`, `TodoModel.query().with(\.user, .joined).with(\.tags)` typed
+        // `Query<TodoModel.Loaded<UserModel?, [TagModel]>>`, selecting the user's columns as `"user.id"`, `"user.name"`,
+        // `"user.email"` and `"user.region"` through `LEFT JOIN "users" ON "users"."id" = "todos"."user_id"`.
+        #expect(users.render().sql == #"SELECT "users".* FROM "users""#)
+        #expect(todos.render().sql == #"SELECT "todos".* FROM "todos""#)
+    }
+
+    /// Select-in loads leave the main query as it is, before or after the other builders: each level of relations is
+    /// fetched by a query of its own. Several relations load on one query and on one nested row.
+    @Test func selectInLoadsKeepTheMainQuery() {
+        let users: Query<UserModel.Loaded<[TodoModel.Loaded<UserModel?, [TagModel]>]>> = UserModel.query()
+            .with(\.todos) { $0.with(\.user).with(\.tags, .selectIn) }
+            .filter(UserModel.region == "eu")
+            .orderBy(UserModel.name.asc)
+            .limit(10)
+        let rendered = users.render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."region" = $1 ORDER BY "users"."name" ASC LIMIT 10"#)
+        #expect(rendered.binds.map(\.description) == ["eu"])
+
+        let members: Query<MemberModel.Loaded<OrganizationModel?, MemberModel.Loaded<NotLoaded, MemberModel?>?>> = MemberModel.query()
+            .with(\.organization)
+            .with(\.manager) { $0.with(\.manager) }
+        #expect(members.render().sql == #"SELECT "members".* FROM "members""#)
+    }
+
     /// A comparison on a nullable column is `Expr<Bool?>`, and queries, updates and deletes filter by it.
     @Test func nullableComparisonsFilterQueriesUpdatesAndDeletes() {
         let isToday: Expr<Bool?> = TodoModel.note == "today"

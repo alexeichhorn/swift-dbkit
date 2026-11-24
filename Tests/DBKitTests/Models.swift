@@ -7,6 +7,7 @@ class UserModel {
     var name: String
     @Unique var email: String
     var region: String?
+    @HasMany var todos: [TodoModel]
 }
 
 @Model(table: "todos")
@@ -16,6 +17,22 @@ class TodoModel {
     var title: String
     var note: String?
     var isComplete: Bool = false
+    @BelongsTo(key: "userID") var user: UserModel?
+    @ManyToMany(through: TodoTagModel.self, from: "todoID", to: "tagID") var tags: [TagModel]
+}
+
+/// The kit's `tags`, with rust-dbkit's reverse relation `todos`.
+@Model(table: "tags")
+class TagModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+    @ManyToMany(through: TodoTagModel.self, from: "tagID", to: "todoID") var todos: [TodoModel]
+}
+
+@Model(table: "todo_tags")
+class TodoTagModel {
+    @Key var todoID: Int64
+    @Key var tagID: Int64
 }
 
 @Model(table: "order_lines")
@@ -38,6 +55,23 @@ class RunPayloadModel {
 class NullableRowModel {
     @Key @AutoIncrement var id: Int64
     var note: String?
+}
+
+/// A self-referencing chain for multi-hop relation paths.
+@Model(table: "members")
+class MemberModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+    var organizationID: Int64
+    var managerID: Int64?
+    @BelongsTo(key: "organizationID") var organization: OrganizationModel?
+    @BelongsTo(key: "managerID") var manager: MemberModel?
+}
+
+@Model(table: "organizations")
+class OrganizationModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
 }
 
 /// A key with a nullable column.

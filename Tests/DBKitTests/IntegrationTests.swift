@@ -60,7 +60,171 @@ class ValueRowModel {
     var backupEmail: EmailAddress?
 }
 
+/// Teams referenced by a renamed text column other than the primary key. A player names two teams, so each
+/// `@HasMany` names its foreign key.
+@Model(table: "teams")
+class TeamModel {
+    @Key @AutoIncrement var id: Int64
+    @Unique @ColumnName("code") var handle: String
+    var name: String
+    @HasMany(key: "teamHandle", references: "handle") var players: [PlayerModel]
+    @HasMany(key: "formerTeamHandle", references: "handle") var formerPlayers: [PlayerModel]
+}
+
+/// A `UUID` key and two renamed foreign keys, one of them nullable.
+@Model(table: "players")
+class PlayerModel {
+    @Key var id: UUID
+    var name: String
+    @ColumnName("team_code") var teamHandle: String
+    @ColumnName("former_team_code") var formerTeamHandle: String?
+    @BelongsTo(key: "teamHandle", references: "handle") var team: TeamModel?
+    @BelongsTo(key: "formerTeamHandle", references: "handle") var formerTeam: TeamModel?
+    @HasMany var seasons: [RosterEntryModel]
+}
+
+/// A composite key with a foreign key in it.
+@Model(table: "roster_entries")
+class RosterEntryModel {
+    @Key var playerID: UUID
+    @Key var season: Int32
+    var role: String
+    @BelongsTo(key: "playerID") var player: PlayerModel?
+}
+
+/// Accepts any todo row loaded with its user, whatever else is loaded.
+private func ownerName(of todo: TodoModel.WithUser) -> String? {
+    todo.user?.name
+}
+
+/// Accepts any member row loaded with its organization and manager.
+private func summary(of member: MemberModel.WithOrganizationAndManager) -> String {
+    "\(member.name), \(member.organization?.name ?? "-"), \(member.manager?.name ?? "-")"
+}
+
+/// Accepts any player row loaded with both teams.
+private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?] {
+    [player.team?.name, player.formerTeam?.name]
+}
+
 @Suite struct IntegrationTests {
+    @Test func eagerLoadingSelectInJoinedNestedAndExplicit() async throws {
+        try await withRollback { tx in
+            let (alex, _) = try await seedTodos(on: tx)
+
+            let users = try await UserModel.query().orderBy(UserModel.id.asc).with(\.todos) { $0.with(\.tags) }.all(on: tx)
+            #expect(users.map(\.name) == ["Alex", "Sam"])
+            #expect(users[0].todos.map(\.title) == ["Buy milk", "Ship it"])
+            #expect(users[0].todos[0].tags.map(\.name) == ["home", "urgent"])
+            #expect(users[1].todos.isEmpty)
+
+            // Waits for slice 18: the same load with `.joined` at both levels, and
+            // `.with(\.todos, .joined).filter(TodoModel.title == "Ship it")` loading only that todo.
+
+            // Waits for slice 20: this query filtered by `TodoModel.Relations.user.name == "Alex"`.
+            let todos = try await TodoModel.query()
+                .orderBy(TodoModel.id.asc)
+                .with(\.user) { $0.with(\.todos) }
+                .all(on: tx)
+            #expect(todos.count == 2)
+            #expect(todos[0].user?.todos.count == 2)
+
+            // Waits for slice 19: `sam.load(\.todos, on:)` loads no todos.
+            let withUser = try #require(try await TodoModel.query().with(\.user).with(\.tags).first(on: tx))
+            let plain: TodoModel = withUser
+            #expect(plain.id == withUser.id)
+            #expect(ownerName(of: withUser) == "Alex")
+            #expect(try await UserModel.find(alex.id, on: tx)?.email == "alex@example.com")
+        }
+    }
+
+    /// A self-reference through a nullable key, several relations on one query, and loaded rows passed as the plain
+    /// model and as `With…` types.
+    @Test func selectInLoadsSelfReferencesAndPassesAsWithTypes() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE TEMP TABLE organizations (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL)")
+            try await tx.query(
+                "CREATE TEMP TABLE members (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, organization_id BIGINT NOT NULL, manager_id BIGINT)"
+            )
+            let acme = try #require(try await OrganizationModel.insert(OrganizationModel.Insert(name: "Acme")).returningAll().first(on: tx))
+            let alex = try #require(
+                try await MemberModel.insert(MemberModel.Insert(name: "Alex", organizationID: acme.id)).returningAll().first(on: tx))
+            let sam = try #require(
+                try await MemberModel.insert(MemberModel.Insert(name: "Sam", organizationID: acme.id, managerID: alex.id)).returningAll()
+                    .first(on: tx))
+            try await MemberModel.insert(MemberModel.Insert(name: "Kim", organizationID: acme.id, managerID: sam.id)).execute(on: tx)
+
+            let chains = try await MemberModel.query()
+                .orderBy(MemberModel.id.asc)
+                .with(\.organization)
+                .with(\.manager) { $0.with(\.manager) }
+                .all(on: tx)
+            #expect(chains.map { $0.manager?.name } == [nil, "Alex", "Sam"])
+            #expect(chains.map { $0.manager?.manager?.name } == [nil, nil, "Alex"])
+            #expect(chains.map { $0.organization?.name } == ["Acme", "Acme", "Acme"])
+
+            let members = try await MemberModel.query().orderBy(MemberModel.id.asc).with(\.manager).with(\.organization).all(on: tx)
+            #expect(members.map { summary(of: $0) } == ["Alex, Acme, -", "Sam, Acme, Alex", "Kim, Acme, Sam"])
+            let plain: [MemberModel] = members
+            #expect(plain.map(\.managerID) == [nil, alex.id, sam.id])
+        }
+    }
+
+    /// Keys of other types than `Int64`, renamed key columns, a referenced column other than the primary key, a
+    /// nullable foreign key and a composite key.
+    @Test func selectInLoadsFollowRenamedNullableAndCompositeKeys() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE TEMP TABLE teams (id BIGSERIAL PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL)")
+            try await tx.query(
+                "CREATE TEMP TABLE players (id UUID PRIMARY KEY, name TEXT NOT NULL, team_code TEXT NOT NULL, former_team_code TEXT)")
+            try await tx.query(
+                """
+                CREATE TEMP TABLE roster_entries (
+                    player_id UUID NOT NULL, season INTEGER NOT NULL, role TEXT NOT NULL, PRIMARY KEY (player_id, season)
+                )
+                """)
+            try await TeamModel.insert([
+                TeamModel.Insert(handle: "red", name: "Red"),
+                TeamModel.Insert(handle: "blue", name: "Blue"),
+                TeamModel.Insert(handle: "gray", name: "Gray"),
+            ])
+            .execute(on: tx)
+            let (ana, ben) = (UUID(), UUID())
+            try await PlayerModel.insert([
+                PlayerModel.Insert(id: ana, name: "Ana", teamHandle: "red"),
+                PlayerModel.Insert(id: ben, name: "Ben", teamHandle: "blue", formerTeamHandle: "red"),
+            ])
+            .execute(on: tx)
+            try await RosterEntryModel.insert([
+                RosterEntryModel.Insert(playerID: ana, season: 2024, role: "captain"),
+                RosterEntryModel.Insert(playerID: ana, season: 2025, role: "keeper"),
+                RosterEntryModel.Insert(playerID: ben, season: 2025, role: "wing"),
+            ])
+            .execute(on: tx)
+
+            let teams = try await TeamModel.query().orderBy(TeamModel.id.asc).with(\.players).with(\.formerPlayers).all(on: tx)
+            #expect(teams.map { $0.players.map(\.name) } == [["Ana"], ["Ben"], []])
+            #expect(teams.map { $0.formerPlayers.map(\.name) } == [["Ben"], [], []])
+
+            let players = try await PlayerModel.query()
+                .orderBy(PlayerModel.name.asc)
+                .with(\.team)
+                .with(\.formerTeam)
+                .with(\.seasons) { $0.with(\.player) }
+                .all(on: tx)
+            #expect(players.map { teamNames(of: $0) } == [["Red", nil], ["Blue", "Red"]])
+            #expect(players.map { $0.seasons.map(\.role).sorted() } == [["captain", "keeper"], ["wing"]])
+            #expect(players[0].seasons.allSatisfy { $0.player?.id == ana })
+
+            let entries = try await RosterEntryModel.query()
+                .filter(RosterEntryModel.season == 2025)
+                .orderBy(RosterEntryModel.role.asc)
+                .with(\.player) { $0.with(\.team) }
+                .all(on: tx)
+            #expect(entries.map { $0.player?.team?.name } == ["Red", "Blue"])
+        }
+    }
+
     @Test func urlsTakeTheLibpqSSLModesAndRejectOthers() throws {
         for mode in ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] {
             _ = try Database(url: "postgres://app:secret@db.example.com:6543/app?sslmode=\(mode)")
@@ -632,6 +796,33 @@ private func seedUsers(on tx: Transaction) async throws {
     try await tx.query(
         "INSERT INTO users (name, email, region) VALUES ('Alex', 'alex@example.com', 'eu'), ('Sam', 'sam@example.com', NULL), ('Kim', 'kim@example.com', 'us')"
     )
+}
+
+/// Alex with the todos "Buy milk", tagged "home" and "urgent", and "Ship it"; Sam without todos.
+private func seedTodos(on tx: Transaction) async throws -> (alex: UserModel, sam: UserModel) {
+    try await createUsers(on: tx)
+    try await tx.query(
+        """
+        CREATE TEMP TABLE todos (
+            id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, title TEXT NOT NULL, note TEXT, is_complete BOOLEAN NOT NULL DEFAULT false
+        )
+        """)
+    try await tx.query("CREATE TEMP TABLE tags (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL)")
+    try await tx.query("CREATE TEMP TABLE todo_tags (todo_id BIGINT NOT NULL, tag_id BIGINT NOT NULL, PRIMARY KEY (todo_id, tag_id))")
+
+    let users = try await UserModel.insert([
+        UserModel.Insert(name: "Alex", email: "alex@example.com"),
+        UserModel.Insert(name: "Sam", email: "sam@example.com"),
+    ])
+    .returningAll().all(on: tx)
+    let todos = try await TodoModel.insert([
+        TodoModel.Insert(userID: users[0].id, title: "Buy milk"),
+        TodoModel.Insert(userID: users[0].id, title: "Ship it", note: "today"),
+    ])
+    .returningAll().all(on: tx)
+    let tags = try await TagModel.insert([TagModel.Insert(name: "home"), TagModel.Insert(name: "urgent")]).returningAll().all(on: tx)
+    try await TodoTagModel.insert(tags.map { TodoTagModel.Insert(todoID: todos[0].id, tagID: $0.id) }).execute(on: tx)
+    return (users[0], users[1])
 }
 
 private func backendPID(on executor: some DatabaseExecutor) async throws -> Int32? {

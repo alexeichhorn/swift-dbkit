@@ -7,6 +7,15 @@ class UserModel {
     @Key @AutoIncrement var id: Int64
     var name: String
     var email: String
+    @HasMany var todos: [TodoModel]
+}
+
+@Model(table: "todos")
+class TodoModel {
+    @Key var id: Int64
+    var userID: Int64
+    @BelongsTo(key: "userID") var user: UserModel?
+    var title: String
 }
 
 /// rust-dbkit's `NullabilityRow` of the `*nullab*` fixtures: each value type once required and once nullable.

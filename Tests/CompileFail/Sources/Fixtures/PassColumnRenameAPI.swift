@@ -6,6 +6,7 @@ class RenamedParentModel {
     @ColumnName("type") var kind: String
     @ColumnName("external_ref") var externalReference: String
     var label: String
+    @HasMany var children: [RenamedChildModel]
 }
 
 @Model(table: "renamed_children")
@@ -14,9 +15,10 @@ class RenamedChildModel {
     var parentID: Int64
     @ColumnName("type") var kind: String
     @ColumnName("sort_key") var rankKey: Int64
+    @BelongsTo(key: "parentID") var parent: RenamedParentModel?
 }
 
-private func useRenamedColumns() {
+private func useRenamedColumns(loaded: RenamedParentModel.Loaded<[RenamedChildModel]>) {
     _ = RenamedParentModel.kind
     _ = RenamedParentModel.externalReference
     _ = RenamedChildModel.kind
@@ -30,5 +32,5 @@ private func useRenamedColumns() {
     _ = RenamedParentModel.update()
         .set(RenamedParentModel.kind, to: "secondary")
         .set(RenamedParentModel.externalReference, to: "ref-2")
-    // Waits for slice 17: the `children`/`parent` relations and a loaded parent's `children`.
+    let _: [RenamedChildModel] = loaded.children
 }
