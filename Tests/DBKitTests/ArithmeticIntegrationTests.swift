@@ -2,8 +2,7 @@ import DBKit
 import Foundation
 import Testing
 
-/// rust-dbkit's `nullable_arithmetic_records`. `Date` stands in for its `timestamp` columns. Waits for slice 12:
-/// `var requiredInterval: Interval` and `var nullableInterval: Interval?`.
+/// rust-dbkit's `nullable_arithmetic_records`. `Date` stands in for its `timestamp` columns.
 @Model(table: "nullable_arithmetic_records")
 class NullableArithmeticRecordModel {
     @Key @AutoIncrement var id: Int64
@@ -12,6 +11,8 @@ class NullableArithmeticRecordModel {
     var nullableRight: Int32?
     var requiredAt: Date
     var nullableAt: Date?
+    var requiredInterval: Interval
+    var nullableInterval: Interval?
 }
 
 /// One column of each numeric type, for arithmetic across types.
@@ -86,6 +87,24 @@ class MixedNumberModel {
         }
     }
 
+    @Test func arithmeticTemporalOffsetFilterAndOrderingRoundtrip() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let base = isoDate("2024-04-02T08:00:00Z")
+            let row1 = try await seedRecord(on: tx, 1, 0, baseline: 0, at: base)
+            let row2 = try await seedRecord(on: tx, 3, 0, baseline: 0, at: base + 3600)
+            _ = try await seedRecord(on: tx, 5, 0, baseline: 0, at: base + 4 * 3600)
+
+            let cutoff = base + 4 * 3600
+            let rows = try await RecordModel.query()
+                .filter(RecordModel.occurredAt + SQL.interval(hours: RecordModel.leftValue) <= cutoff)
+                .orderBy((RecordModel.occurredAt - SQL.interval(hours: 1)).asc)
+                .all(on: tx)
+
+            #expect(rows.map(\.id) == [row1.id, row2.id])
+        }
+    }
+
     @Test func divisionByZeroReturnsPostgresError() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -146,27 +165,35 @@ class MixedNumberModel {
             let base = isoDate("2024-04-03T12:00:00Z")
             try await NullableArithmeticRecordModel.insert([
                 NullableArithmeticRecordModel.Insert(
-                    requiredValue: 10, nullableLeft: 4, nullableRight: 2, requiredAt: base, nullableAt: base),
+                    requiredValue: 10, nullableLeft: 4, nullableRight: 2, requiredAt: base, nullableAt: base,
+                    requiredInterval: .hours(1), nullableInterval: .hours(2)),
                 NullableArithmeticRecordModel.Insert(
-                    requiredValue: 10, nullableLeft: nil, nullableRight: 2, requiredAt: base, nullableAt: nil),
+                    requiredValue: 10, nullableLeft: nil, nullableRight: 2, requiredAt: base, nullableAt: nil,
+                    requiredInterval: .hours(1), nullableInterval: .hours(2)),
                 NullableArithmeticRecordModel.Insert(
-                    requiredValue: 10, nullableLeft: 4, nullableRight: nil, requiredAt: base, nullableAt: base),
+                    requiredValue: 10, nullableLeft: 4, nullableRight: nil, requiredAt: base, nullableAt: base,
+                    requiredInterval: .hours(1), nullableInterval: nil),
                 NullableArithmeticRecordModel.Insert(
-                    requiredValue: 10, nullableLeft: nil, nullableRight: nil, requiredAt: base, nullableAt: nil),
+                    requiredValue: 10, nullableLeft: nil, nullableRight: nil, requiredAt: base, nullableAt: nil,
+                    requiredInterval: .hours(1), nullableInterval: nil),
             ])
             .execute(on: tx)
             // Waits for slice 14: the projections `added`, `subtracted`, `multiplied`, `divided`, `floating_divided`
-            // and `literal_minus_nullable` per row, NULL wherever an operand is NULL.
-            // Waits for slice 12: the projections of `nullableAt` and `requiredAt` plus or minus the interval columns, and
-            // of `base` plus or minus `SQL.interval(hours:)` of the nullable columns.
+            // and `literal_minus_nullable` per row, NULL wherever an operand is NULL, and the projections
+            // `nullable_time_required_interval` (`nullableAt + requiredInterval`), `required_time_nullable_interval`
+            // (`requiredAt - nullableInterval`), `nullable_time_nullable_interval` (`nullableAt + nullableInterval`),
+            // `literal_time_plus_nullable_interval` (`base + SQL.interval(hours: nullableLeft)`) and
+            // `literal_time_minus_nullable_interval` (`base - SQL.interval(hours: nullableRight)`): base + 1 hour, base
+            // - 2 hours, base + 2 hours, base + 4 hours and base - 2 hours where no operand is NULL.
 
+            let oneHourLater = base + 3600
             let matching = try await NullableArithmeticRecordModel.query()
                 .filter(100 - NullableArithmeticRecordModel.nullableLeft == 96)
                 .filter(NullableArithmeticRecordModel.nullableLeft + NullableArithmeticRecordModel.requiredValue == 14)
+                .filter(NullableArithmeticRecordModel.nullableAt + NullableArithmeticRecordModel.requiredInterval == oneHourLater)
                 .orderBy(NullableArithmeticRecordModel.id.asc)
                 .all(on: tx)
             #expect(matching.map(\.id) == [1, 3])
-            // Waits for slice 12: the filter `nullableAt + requiredInterval == base + 1 hour` on `matching`.
 
             let nullResults = try await NullableArithmeticRecordModel.query()
                 .filter((100 - NullableArithmeticRecordModel.nullableLeft).isNull)
@@ -182,7 +209,8 @@ class MixedNumberModel {
             let operands: [(Int32?, Int32?)] = [(4, 2), (1, 2), (3, 3), (nil, 2), (4, nil), (nil, nil)]
             try await NullableArithmeticRecordModel.insert(
                 operands.map { left, right in
-                    NullableArithmeticRecordModel.Insert(requiredValue: 0, nullableLeft: left, nullableRight: right, requiredAt: Date())
+                    NullableArithmeticRecordModel.Insert(
+                        requiredValue: 0, nullableLeft: left, nullableRight: right, requiredAt: Date(), requiredInterval: .hours(1))
                 }
             )
             .execute(on: tx)
@@ -205,7 +233,7 @@ class MixedNumberModel {
             try await NullableArithmeticRecordModel.insert(
                 operands.map { required, left in
                     NullableArithmeticRecordModel.Insert(
-                        requiredValue: required, nullableLeft: left, nullableRight: nil, requiredAt: Date())
+                        requiredValue: required, nullableLeft: left, nullableRight: nil, requiredAt: Date(), requiredInterval: .hours(1))
                 }
             )
             .execute(on: tx)
@@ -248,7 +276,7 @@ private func setupSchema(on tx: Transaction) async throws {
         """
         CREATE TEMP TABLE nullable_arithmetic_records (
             id BIGSERIAL PRIMARY KEY, required_value INTEGER NOT NULL, nullable_left INTEGER, nullable_right INTEGER,
-            required_at TIMESTAMPTZ NOT NULL, nullable_at TIMESTAMPTZ
+            required_at TIMESTAMPTZ NOT NULL, nullable_at TIMESTAMPTZ, required_interval INTERVAL NOT NULL, nullable_interval INTERVAL
         )
         """)
 }

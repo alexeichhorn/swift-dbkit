@@ -2,8 +2,7 @@ import DBKit
 import Foundation
 
 /// rust-dbkit's `CastRow`, with `Decimal` besides. `Date` stands in for its `timestamp`, `timestamptz` and `date`
-/// columns; Swift has no type for its `time` columns. Waits for slice 12: `var requiredInterval: Interval` and
-/// `var nullableInterval: Interval?`.
+/// columns; Swift has no type for its `time` columns.
 @Model(table: "cast_rows")
 class CastRowModel {
     @Key var id: Int64
@@ -27,6 +26,8 @@ class CastRowModel {
     var nullableUUID: UUID?
     var requiredDate: Date
     var nullableDate: Date?
+    var requiredInterval: Interval
+    var nullableInterval: Interval?
 }
 
 private typealias C = CastRowModel
@@ -142,8 +143,8 @@ private func textInputCasts() {
     let _: Expr<UUID?> = C.nullableText.cast(to: UUID.self)
     let _: Expr<Date> = C.requiredText.cast(to: Date.self)
     let _: Expr<Date?> = C.nullableText.cast(to: Date.self)
-    // Waits for slice 12: `C.requiredText.cast(to: Interval.self)` is `Expr<Interval>`, and `Expr<Interval?>` from
-    // `nullableText`.
+    let _: Expr<Interval> = C.requiredText.cast(to: Interval.self)
+    let _: Expr<Interval?> = C.nullableText.cast(to: Interval.self)
 }
 
 // Every scalar type casts to text through its output function.
@@ -168,8 +169,8 @@ private func textOutputCasts() {
     let _: Expr<String?> = C.nullableUUID.cast(to: String.self)
     let _: Expr<String> = C.requiredDate.cast(to: String.self)
     let _: Expr<String?> = C.nullableDate.cast(to: String.self)
-    // Waits for slice 12: `C.requiredInterval.cast(to: String.self)` is `Expr<String>`, and `Expr<String?>` from
-    // `nullableInterval`.
+    let _: Expr<String> = C.requiredInterval.cast(to: String.self)
+    let _: Expr<String?> = C.nullableInterval.cast(to: String.self)
 }
 
 // rust-dbkit's casts among `timestamp`, `timestamptz` and `date` are one cast from `Date` to `Date` here.

@@ -3,8 +3,7 @@ import Foundation
 
 /// rust-dbkit's `NullableArithmeticRow`: each numeric type once required and once nullable, and `Decimal` and `Int`
 /// besides.
-/// `Date` stands in for both of its timestamp types. Waits for slice 12: `var requiredInterval: Interval` and
-/// `var nullableInterval: Interval?`.
+/// `Date` stands in for both of its timestamp types.
 @Model(table: "nullable_arithmetic_rows")
 class NullableArithmeticRowModel {
     @Key var id: Int64
@@ -23,6 +22,8 @@ class NullableArithmeticRowModel {
     var requiredInt: Int
     var requiredDate: Date
     var nullableDate: Date?
+    var requiredInterval: Interval
+    var nullableInterval: Interval?
 }
 
 private typealias R = NullableArithmeticRowModel
@@ -248,7 +249,17 @@ private func castsToDoubleKeepNullability() {
 
     // Waits for slice 15: `SQL.power` is `Expr<Double>` on required operands and `Expr<Double?>` when one is nullable,
     // for each numeric type.
-    // Waits for slice 12: `SQL.interval(hours:)`, `days`, `minutes` and `seconds` of a column keep its nullability.
+
+    // Interval constructors keep their input's nullability. Seconds take every integer width and fractions.
+    let _: Expr<Interval> = SQL.interval(hours: R.requiredI32)
+    let _: Expr<Interval?> = SQL.interval(days: R.nullableI32)
+    let _: Expr<Interval?> = SQL.interval(hours: R.nullableI32)
+    let _: Expr<Interval?> = SQL.interval(minutes: R.nullableI32)
+    let _: Expr<Interval?> = SQL.interval(seconds: R.nullableI16)
+    let _: Expr<Interval?> = SQL.interval(seconds: R.nullableI32)
+    let _: Expr<Interval?> = SQL.interval(seconds: R.nullableI64)
+    let _: Expr<Interval?> = SQL.interval(seconds: R.nullableF32)
+    let _: Expr<Interval?> = SQL.interval(seconds: R.nullableF64)
 }
 
 private func comparisonsOnNullableArithmeticAreNullable() {
@@ -277,8 +288,18 @@ private func comparisonsOnNullableArithmeticAreNullable() {
     let _: Expr<Bool?> = R.nullableI32 >= nullableRHS
     let _: Expr<Bool> = R.requiredI32 < (R.nullableI32 ?? 0)
 
-    // Waits for slice 12: `Date` plus or minus an `Interval`, from a column, a value or `SQL.interval(hours:)` of a
-    // nullable column, is `Expr<Date?>` when either operand is nullable.
+    // Timestamp arithmetic is NULL when the timestamp, the interval or both are.
+    let _: Expr<Date?> = R.nullableDate + R.requiredInterval
+    let _: Expr<Date?> = R.requiredDate + R.nullableInterval
+    let _: Expr<Date?> = R.nullableDate + R.nullableInterval
+    let _: Expr<Date?> = R.nullableDate - R.requiredInterval
+    let _: Expr<Date?> = R.requiredDate - R.nullableInterval
+    let _: Expr<Date?> = R.nullableDate - R.nullableInterval
+
+    // A timestamp value on the left keeps the interval expression's NULL.
+    let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+    let _: Expr<Date?> = timestamp + SQL.interval(hours: R.nullableI32)
+    let _: Expr<Date?> = timestamp - SQL.interval(hours: R.nullableI32)
 
     _ = R.query()
         .filter(100 - R.nullableI32 > 50)
@@ -286,5 +307,5 @@ private func comparisonsOnNullableArithmeticAreNullable() {
         .filter(R.requiredI32 < R.nullableI32 + 1)
         .filter(R.requiredI32 >= R.nullableI32 + 1)
         .filter(R.nullableI32 * R.nullableI32 == nil)
-    // Waits for slice 12: the filter `(R.nullableDate + R.requiredInterval).isNotNull`.
+        .filter((R.nullableDate + R.requiredInterval).isNotNull)
 }

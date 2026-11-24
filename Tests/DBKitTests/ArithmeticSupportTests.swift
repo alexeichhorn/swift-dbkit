@@ -1,4 +1,5 @@
 import DBKit
+import Foundation
 import Testing
 
 @Suite struct ArithmeticSupportTests {
@@ -13,6 +14,21 @@ import Testing
                 == #"SELECT "records".* FROM "records" WHERE ("records"."left_value" + $1) < "records"."baseline_value" AND ("records"."right_value" - "records"."left_value") > $2 ORDER BY ("records"."baseline_value" + "records"."left_value") DESC"#
         )
         #expect(rendered.binds.map(\.description) == ["1", "0"])
+    }
+
+    @Test func queryWithTimestampOffsetArithmeticHasExpectedSQLShape() throws {
+        let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
+        let rendered = RecordModel.query()
+            .filter(RecordModel.occurredAt + SQL.interval(hours: RecordModel.leftValue) <= cutoff)
+            .orderBy((RecordModel.occurredAt - SQL.interval(hours: 1)).asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "records".* FROM "records" WHERE ("records"."occurred_at" + ("records"."left_value" * INTERVAL '1 hour')) <= $1 ORDER BY ("records"."occurred_at" - ($2 * INTERVAL '1 hour')) ASC"#
+        )
+        try #require(rendered.binds.count == 2)
+        #expect(rendered.binds[0].value as? Date == cutoff)
+        #expect(rendered.binds[1].value as? Int == 1)
     }
 
     /// `smallint` with an `integer` operand is `Expr<Int32>`, so it compares with `Int32` values; two `smallint`s stay

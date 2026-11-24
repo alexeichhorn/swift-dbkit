@@ -346,12 +346,11 @@ class ValueRowModel {
 
     @Test func postgresTypesAggregatesAndFunctions() async throws {
         try await withRollback { tx in
-            // Waits for slice 12: `lease_window INTERVAL NOT NULL`.
             try await tx.query(
                 """
                 CREATE TEMP TABLE documents (
                     id BIGSERIAL PRIMARY KEY, type TEXT NOT NULL, tags TEXT[] NOT NULL, scores BIGINT[] NOT NULL, preferences JSONB,
-                    payload BYTEA NOT NULL, access_mask BIGINT NOT NULL
+                    payload BYTEA NOT NULL, access_mask BIGINT NOT NULL, lease_window INTERVAL NOT NULL
                 )
                 """)
             let document = try await DocumentModel.insert(
@@ -361,15 +360,15 @@ class ValueRowModel {
                     scores: [1, 2],
                     preferences: Preferences(theme: "dark"),
                     payload: Data([0, 1, 2]),
-                    accessMask: 0b0110
-                        // Waits for slice 12: `leaseWindow: .hours(2)`.
+                    accessMask: 0b0110,
+                    leaseWindow: .hours(2)
                 )
             ).returningAll().first(on: tx)
             #expect(
                 document?.preferences == Preferences(theme: "dark") && document?.tags == ["a", "b"] && document?.payload == Data([0, 1, 2]))
             let masked = try await DocumentModel.query()
                 .filter((DocumentModel.accessMask & 0b0010) != 0)
-                // Waits for slice 12: `.filter(SQL.interval(hours: 2) == DocumentModel.leaseWindow)`.
+                .filter(SQL.interval(hours: 2) == DocumentModel.leaseWindow)
                 .filter(DocumentModel.kind == "note")
                 .all(on: tx)
             #expect(masked.count == 1)

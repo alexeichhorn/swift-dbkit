@@ -82,6 +82,22 @@ private let nilUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
         #expect(rendered.binds[0].value as? Data == payload)
     }
 
-    // Waits for slice 12: `valueFromInterval`, 2 days and 3,600,000,000 microseconds rendered as a bind, and
-    // `selectBindsInterval`, a `lease_window` filter binding 7,200,000,000 microseconds.
+    /// rust-dbkit's `Value::from`; a bind keeps all three components.
+    @Test func valueFromInterval() {
+        let interval = Interval(months: 0, days: 2, microseconds: 3_600_000_000)
+
+        let bind = Bind(interval)
+
+        #expect(bind.value as? Interval == interval)
+        #expect(bind.description == "0 mons 2 days 3600000000 us")
+    }
+
+    @Test func selectBindsInterval() throws {
+        let interval = Interval(months: 0, days: 0, microseconds: 7_200_000_000)
+
+        let rendered = IntervalRowModel.query().filter(IntervalRowModel.leaseWindow == interval).render()
+
+        try #require(rendered.binds.count == 1)
+        #expect(rendered.binds[0].value as? Interval == interval)
+    }
 }

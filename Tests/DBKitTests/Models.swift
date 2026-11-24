@@ -98,7 +98,16 @@ class DocumentModel {
     var preferences: Preferences?
     var payload: Data
     var accessMask: Int64
-    // Waits for slice 12: `var leaseWindow: Interval`.
+    var leaseWindow: Interval
+}
+
+/// rust-dbkit's `interval_rows` of `integration_interval.rs` and `type_support.rs`.
+@Model(table: "interval_rows")
+class IntervalRowModel {
+    @Key var id: Int64
+    var baseIntervalHours: Int32
+    var backoffMinutes: Int32?
+    var leaseWindow: Interval
 }
 
 /// rust-dbkit's `events`. `Date` stands in for its `timestamp` and `date` columns; Swift has no type for its `time`

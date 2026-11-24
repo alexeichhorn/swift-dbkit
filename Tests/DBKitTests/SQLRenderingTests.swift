@@ -13,6 +13,17 @@ class PriceModel {
     var rate: Double
 }
 
+/// Timestamp, interval and text columns for the interval rendering test.
+@Model(table: "leases")
+class LeaseModel {
+    @Key @AutoIncrement var id: Int64
+    var startsAt: Date
+    var endsAt: Date?
+    var term: Interval
+    var grace: Interval?
+    var note: String
+}
+
 @Suite struct SQLRenderingTests {
     @Test func filtersOrderingAndNullHandling() {
         let userID: Int64 = 7
@@ -160,6 +171,41 @@ class PriceModel {
                 == #"UPDATE "prices" SET "quantity" = ("prices"."quantity" - $1), "minimum" = ("prices"."quantity" / $2), "discount" = ("prices"."discount" * $3) WHERE "prices"."id" = $4"#
         )
         #expect(update.binds.map(\.description) == ["1", "2", "2", "7"])
+    }
+
+    /// `Interval` keeps PostgreSQL's three components. Intervals add to and subtract from each other and timestamps,
+    /// keeping nullability, and cast to and from text.
+    @Test func intervalComponentsArithmeticAndCasts() {
+        #expect(Interval.days(2) == Interval(days: 2))
+        #expect(Interval.hours(2) == Interval(microseconds: 7_200_000_000))
+        #expect(Interval.minutes(-30) == Interval(microseconds: -1_800_000_000))
+        #expect(Interval.seconds(90) == Interval(microseconds: 90_000_000))
+        let mixed = Interval(months: 1, days: 2, microseconds: 3)
+        #expect(mixed.months == 1 && mixed.days == 2 && mixed.microseconds == 3)
+        #expect(mixed.description == "1 mons 2 days 3 us")
+
+        let extended: Expr<Interval?> = LeaseModel.term + LeaseModel.grace
+        let shortened: Expr<Interval> = LeaseModel.term - Interval.minutes(15)
+        let ends: Expr<Date> = LeaseModel.startsAt + LeaseModel.term
+        let lastHour: Expr<Date?> = LeaseModel.endsAt - Interval.hours(1)
+        let noted: Expr<Interval> = LeaseModel.note.cast(to: Interval.self)
+        let termText: Expr<String> = LeaseModel.term.cast(to: String.self)
+        let rendered = LeaseModel.query()
+            .filter(extended > Interval.days(1))
+            .filter(lastHour >= ends)
+            .filter(noted == shortened)
+            .orderBy(termText.asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "leases".* FROM "leases" WHERE ("leases"."term" + "leases"."grace") > $1 AND ("leases"."ends_at" - $2) >= ("leases"."starts_at" + "leases"."term") AND CAST("leases"."note" AS interval) = ("leases"."term" - $3) ORDER BY CAST("leases"."term" AS text) ASC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["0 mons 1 days 0 us", "0 mons 0 days 3600000000 us", "0 mons 0 days 900000000 us"])
+
+        // Unlike rust-dbkit, whole units such as hours take fractions too.
+        let fractional = LeaseModel.query().orderBy(SQL.interval(hours: 1.5).asc).render()
+        #expect(fractional.sql == #"SELECT "leases".* FROM "leases" ORDER BY ($1 * INTERVAL '1 hour') ASC"#)
+        #expect(fractional.binds.map(\.description) == ["1.5"])
     }
 
     @Test func mutations() {

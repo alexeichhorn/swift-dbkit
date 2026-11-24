@@ -1,4 +1,5 @@
 import DBKit
+import Foundation
 import Testing
 
 /// The `users` table of rust-dbkit's `sql_compiler.rs`, with nullable `email` and `score`.
@@ -16,6 +17,14 @@ class CompilerCompactRowModel {
     @Key var id: Int64
     var leftUnits: Int16
     var rightUnits: Int16
+}
+
+/// The `window_rows` table of rust-dbkit's `sql_compiler.rs`. `Date` stands in for its `timestamp` column.
+@Model(table: "window_rows")
+class CompilerWindowRowModel {
+    @Key var id: Int64
+    var anchorAt: Date
+    var offsetUnits: Int32
 }
 
 @Suite struct SQLCompilerTests {
@@ -131,6 +140,18 @@ class CompilerCompactRowModel {
         let rendered = SaleModel.query().filter(predicate).render()
         #expect(rendered.sql == #"SELECT "sales".* FROM "sales" WHERE ((("sales"."amount" + $1) - "sales"."id") + $2) >= $3"#)
         #expect(rendered.binds.map(\.description) == ["5", "2", "20"])
+    }
+
+    @Test func compilesTimestampPlusCustomOffsetFunctionFilter() throws {
+        let cutoff = Date(timeIntervalSince1970: 1_700_000_000)
+        let predicate: Expr<Bool> = CompilerWindowRowModel.anchorAt + SQL.interval(hours: CompilerWindowRowModel.offsetUnits) <= cutoff
+        let rendered = CompilerWindowRowModel.query().filter(predicate).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "window_rows".* FROM "window_rows" WHERE ("window_rows"."anchor_at" + ("window_rows"."offset_units" * INTERVAL '1 hour')) <= $1"#
+        )
+        try #require(rendered.binds.count == 1)
+        #expect(rendered.binds[0].value as? Date == cutoff)
     }
 
     /// `smallint` with an `integer` operand is `Expr<Int32>`, so it compares with an `Int32` value. Two `smallint`s, or a
