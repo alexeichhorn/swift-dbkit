@@ -75,6 +75,21 @@ compile, an integer literal takes its column's integer type, and a nullable colu
 matches, since PostgreSQL compares it as NULL: the `("internal", "beta", nil)` row above matches nothing. `in` with an
 empty array matches nothing.
 
+## Row Locking
+
+```swift
+try await db.transaction { tx in
+    let jobs = try await UserModel.query().forUpdate().all(on: tx)
+    let next = try await UserModel.query().forUpdate(.skipLocked).limit(1).all(on: tx)
+    let now = try await UserModel.query().forUpdate(.noWait).all(on: tx)
+    print(jobs.count, next.count, now.count)
+}
+```
+
+With any join, `join`, `leftJoin` or a `.joined` load, the lock is scoped to the query's table
+(`FOR UPDATE OF "users"`), or to its alias (`FOR UPDATE OF "author"`), so joined rows stay unlocked. PostgreSQL
+rejects locks combined with `DISTINCT` or `GROUP BY`.
+
 ## Correlated EXISTS / NOT EXISTS
 
 Columns of the outer model inside a subquery refer to the outer row:
