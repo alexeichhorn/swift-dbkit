@@ -9,6 +9,12 @@ extension SelectQuery {
         filtered(predicate.sqlNode)
     }
 
+    /// Adds a dynamically built condition; an empty condition adds nothing.
+    public func filter(_ condition: Condition) -> Self {
+        guard let predicate = condition.predicate else { return self }
+        return filter(predicate)
+    }
+
     public func orderBy(_ orders: OrderBy...) -> Self {
         updating { $0.orderBy += orders }
     }

@@ -103,3 +103,58 @@ extension SQLExpression where Value == String? {
         Expr(.infix(sqlNode, "ILIKE", pattern.sqlNode, parenthesized: false))
     }
 }
+
+/// A row-value expression for multi-column comparisons, e.g. `(a, b) IN ((…), (…))`.
+public struct RowValue<each Value: SQLType>: Sendable {
+    let nodes: [SQLNode]
+
+    /// `(a, b, …) IN ((…), …)`; an empty list matches nothing. Each tuple value has its column's type, so `nil` fits a
+    /// nullable column. The result is `Expr<Bool?>`, since a nullable column can make the comparison NULL; the overload
+    /// below types it `Expr<Bool>` when every column is required.
+    public func `in`(_ rows: [(repeat each Value)]) -> Expr<Bool?> { matching(rows) }
+
+    private func matching<Result>(_ rows: [(repeat each Value)]) -> Expr<Result> {
+        guard !rows.isEmpty else { return Expr(.raw("FALSE")) }
+        let tuples = rows.map { row in
+            var items: [SQLNode] = []
+            for item in repeat each row { items.append(item.sqlNode) }
+            return SQLNode.list(items)
+        }
+        return Expr(.sequence([.list(nodes), .raw(" IN "), .list(tuples)]))
+    }
+}
+
+extension RowValue where repeat each Value: SQLValue {
+    public func `in`(_ rows: [(repeat each Value)]) -> Expr<Bool> { matching(rows) }
+}
+
+/// A dynamically built AND/OR group of predicates.
+///
+/// ```swift
+/// var condition = Condition.any
+/// if let region { condition.add(UserModel.region == region) }
+/// query = query.filter(condition)   // no filter when the condition is empty
+/// ```
+public struct Condition: Sendable {
+    private let separator: String
+    private var predicates: [SQLNode] = []
+
+    /// Matches when every added predicate matches.
+    public static var all: Condition { Condition(separator: "AND") }
+    /// Matches when any added predicate matches.
+    public static var any: Condition { Condition(separator: "OR") }
+
+    public mutating func add<P: SQLExpression>(_ predicate: P) where P.Value.NonNull == Bool {
+        predicates.append(predicate.sqlNode)
+    }
+
+    public var isEmpty: Bool { predicates.isEmpty }
+
+    /// The combined predicate, or `nil` when nothing was added. It is `Bool?` even for required predicates, since
+    /// `add(_:)` can't change the condition's type when a nullable one joins.
+    public var predicate: Expr<Bool?>? {
+        guard var node = predicates.first else { return nil }
+        for next in predicates.dropFirst() { node = .infix(node, separator, next) }
+        return Expr(node)
+    }
+}
