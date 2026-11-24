@@ -13,7 +13,7 @@ private func useModelAPI(loaded: UserModel.Loaded<[TodoModel]>) {
     _ = TodoModel.Relations.user
     let _: Query<UserModel.Loaded<[TodoModel]>> = UserModel.query().with(\.todos)
     let _: Query<UserModel.Loaded<[TodoModel.Loaded<UserModel?>]>> = UserModel.query().with(\.todos) { $0.with(\.user) }
-    // Waits for slice 18: the nested load of `user` with `.joined`.
+    let _: Query<UserModel.Loaded<[TodoModel.Loaded<UserModel?>]>> = UserModel.query().with(\.todos) { $0.with(\.user, .joined) }
     let _: [TodoModel] = loaded.todos
     // Waits for slice 19: `load(_:on:)` on an unloaded row.
     _ = UserModel.Insert(name: "Alex", email: "a@b.com")

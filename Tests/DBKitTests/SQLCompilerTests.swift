@@ -564,6 +564,21 @@ class CompilerWindowRowModel {
         #expect(rendered.binds.isEmpty)
     }
 
+    /// rust-dbkit selects `users.id` without an alias next to the aliased count; a projection names all its columns
+    /// or none.
+    @Test func compilesSelectOnlyWithJoinAndGroupBy() {
+        let query: Projection<Int64, Int64> = CompilerUserModel.query()
+            .select(CompilerUserModel.id.as("id"), SQL.count(TodoModel.id).as("todo_count"))
+            .join(TodoModel.self, on: CompilerUserModel.id == TodoModel.userID)
+            .groupBy(CompilerUserModel.id)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users"."id" AS "id", COUNT("todos"."id") AS "todo_count" FROM "users" JOIN "todos" ON "users"."id" = "todos"."user_id" GROUP BY "users"."id""#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
     @Test func compilesGroupByExpression() {
         let query: Projection<Date, Decimal?> = SaleModel.query()
             .select(SQL.dateTrunc(.day, SaleModel.createdAt).as("bucket"), SQL.sum(SaleModel.amount).as("total"))

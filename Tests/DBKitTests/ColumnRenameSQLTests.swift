@@ -7,6 +7,7 @@ class RenamedParentModel {
     @ColumnName("type") var kind: String
     @ColumnName("external_ref") var externalReference: String
     var label: String
+    @HasMany var children: [RenamedChildModel]
 }
 
 @Model(table: "renamed_children")
@@ -15,6 +16,7 @@ class RenamedChildModel {
     var parentID: Int64
     @ColumnName("type") var kind: String
     @ColumnName("sort_key") var rankKey: Int64
+    @BelongsTo(key: "parentID") var parent: RenamedParentModel?
 }
 
 @Suite struct ColumnRenameSQLTests {
@@ -66,5 +68,12 @@ class RenamedChildModel {
         #expect(update.binds.map(\.description) == ["secondary", "ref-2", "1"])
     }
 
-    // Waits for slice 18: `joinedLoadingSQLAliasesRenamedColumnsByDatabaseName`, with `children`/`parent` relations on the models.
+    /// Joined columns are aliased by their database names, `type` and `sort_key`, not the property names.
+    @Test func joinedLoadingSQLAliasesRenamedColumnsByDatabaseName() {
+        let query: Query<RenamedParentModel.Loaded<[RenamedChildModel]>> = RenamedParentModel.query().with(\.children, .joined)
+        #expect(
+            query.render().sql
+                == #"SELECT "renamed_parents".*, "renamed_children"."id" AS "children.id", "renamed_children"."parent_id" AS "children.parent_id", "renamed_children"."type" AS "children.type", "renamed_children"."sort_key" AS "children.sort_key" FROM "renamed_parents" LEFT JOIN "renamed_children" ON "renamed_children"."parent_id" = "renamed_parents"."id""#
+        )
+    }
 }

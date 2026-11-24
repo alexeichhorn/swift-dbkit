@@ -236,7 +236,8 @@ private func logicIsNullableWhenAnOperandIs() {
 
     _ = NullabilityRowModel.query().groupBy(NullabilityRowModel.requiredText).having(nullable)
     let _: Expr<Int64> = SQL.count(NullabilityRowModel.id).filter(nullable)
-    // Waits for slice 18: `join(_:on: nullable)` and `leftJoin(_:on: nullable)`.
+    _ = NullabilityRowModel.query().join(NullabilityRowModel.self, on: nullable)
+    _ = NullabilityRowModel.query().leftJoin(NullabilityRowModel.self, on: nullable)
 }
 
 private func mutationsAcceptNilForNullableColumns() {

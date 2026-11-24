@@ -45,11 +45,21 @@ class LeaseModel {
     @Test func eagerLoadingChangesTheRowType() {
         let users: Query<UserModel.Loaded<[TodoModel.Loaded<NotLoaded, [TagModel]>]>> = UserModel.query().with(\.todos) { $0.with(\.tags) }
         let todos: Query<TodoModel.Loaded<UserModel.Loaded<[TodoModel]>?, NotLoaded>> = TodoModel.query().with(\.user) { $0.with(\.todos) }
-        // Waits for slice 18: `both`, `TodoModel.query().with(\.user, .joined).with(\.tags)` typed
-        // `Query<TodoModel.Loaded<UserModel?, [TagModel]>>`, selecting the user's columns as `"user.id"`, `"user.name"`,
-        // `"user.email"` and `"user.region"` through `LEFT JOIN "users" ON "users"."id" = "todos"."user_id"`.
+        let both: Query<TodoModel.Loaded<UserModel?, [TagModel]>> = TodoModel.query().with(\.user, .joined).with(\.tags)
         #expect(users.render().sql == #"SELECT "users".* FROM "users""#)
         #expect(todos.render().sql == #"SELECT "todos".* FROM "todos""#)
+        #expect(
+            both.render().sql
+                == #"SELECT "todos".*, "users"."id" AS "user.id", "users"."name" AS "user.name", "users"."email" AS "user.email", "users"."region" AS "user.region" FROM "todos" LEFT JOIN "users" ON "users"."id" = "todos"."user_id""#
+        )
+    }
+
+    @Test func joinedToManyLoadsAliasEveryLevel() {
+        let sql = UserModel.query().with(\.todos, .joined) { $0.with(\.tags, .joined) }.render().sql
+        #expect(
+            sql
+                == #"SELECT "users".*, "todos"."id" AS "todos.id", "todos"."user_id" AS "todos.user_id", "todos"."title" AS "todos.title", "todos"."note" AS "todos.note", "todos"."is_complete" AS "todos.is_complete", "tags"."id" AS "todos.tags.id", "tags"."name" AS "todos.tags.name" FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id" LEFT JOIN "todo_tags" ON "todo_tags"."todo_id" = "todos"."id" LEFT JOIN "tags" ON "tags"."id" = "todo_tags"."tag_id""#
+        )
     }
 
     /// Select-in loads leave the main query as it is, before or after the other builders: each level of relations is
@@ -68,6 +78,72 @@ class LeaseModel {
             .with(\.organization)
             .with(\.manager) { $0.with(\.manager) }
         #expect(members.render().sql == #"SELECT "members".* FROM "members""#)
+    }
+
+    @Test func explicitJoinFilteringAndRowLocks() {
+        let filtered = UserModel.query().join(\.todos).filter(TodoModel.title == "Keep me").distinct().render().sql
+        #expect(
+            filtered
+                == #"SELECT DISTINCT "users".* FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id" WHERE "todos"."title" = $1"#
+        )
+        // Waits for slice 22: `forUpdate(.skipLocked)` on its own and `leftJoin(\.todos).forUpdate(.noWait)` locking
+        // `FOR UPDATE OF "users" NOWAIT`.
+    }
+
+    /// A join of a relation that is also loaded `.joined` is shared, with the explicit join's kind. A joined model's
+    /// columns filter, order, group and aggregate the query, and keep their own types even through an outer join.
+    /// A join on another model takes any condition and keeps the table's name, so a joined load of that table gets an
+    /// alias. A self-reference is aliased by its relation path.
+    @Test func explicitJoinsJoinedLoadsAndJoinedTableColumns() {
+        let ordered = UserModel.query().leftJoin(\.todos).with(\.todos, .joined).orderBy(UserModel.id.asc, TodoModel.title.desc).render()
+        #expect(
+            ordered.sql
+                == #"SELECT "users".*, "todos"."id" AS "todos.id", "todos"."user_id" AS "todos.user_id", "todos"."title" AS "todos.title", "todos"."note" AS "todos.note", "todos"."is_complete" AS "todos.is_complete" FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id" ORDER BY "users"."id" ASC, "todos"."title" DESC"#
+        )
+
+        let counts: Projection<String, Int64> = UserModel.query()
+            .join(\.todos)
+            .select(UserModel.name, SQL.count(TodoModel.id))
+            .groupBy(UserModel.name)
+            .having(SQL.count(TodoModel.id) > 1)
+            .orderBy(UserModel.name.desc)
+        let rendered = counts.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users"."name", COUNT("todos"."id") FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id" GROUP BY "users"."name" HAVING COUNT("todos"."id") > $1 ORDER BY "users"."name" DESC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["1"])
+
+        let titles: Projection<String, String> = UserModel.query().leftJoin(\.todos).select(UserModel.name, TodoModel.title)
+        #expect(
+            titles.render().sql
+                == #"SELECT "users"."name", "todos"."title" FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id""#)
+
+        let withoutShipIt = UserModel.query()
+            .leftJoin(TodoModel.self, on: TodoModel.userID == UserModel.id && TodoModel.title == "Ship it")
+            .filter(TodoModel.id.isNull)
+            .render()
+        #expect(
+            withoutShipIt.sql
+                == #"SELECT "users".* FROM "users" LEFT JOIN "todos" ON ("todos"."user_id" = "users"."id" AND "todos"."title" = $1) WHERE "todos"."id" IS NULL"#
+        )
+        #expect(withoutShipIt.binds.map(\.description) == ["Ship it"])
+
+        let separate = UserModel.query()
+            .join(TodoModel.self, on: TodoModel.userID == UserModel.id)
+            .filter(TodoModel.title == "Ship it")
+            .with(\.todos, .joined)
+            .render()
+        #expect(
+            separate.sql
+                == #"SELECT "users".*, "users.todos"."id" AS "todos.id", "users.todos"."user_id" AS "todos.user_id", "users.todos"."title" AS "todos.title", "users.todos"."note" AS "todos.note", "users.todos"."is_complete" AS "todos.is_complete" FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id" LEFT JOIN "todos" AS "users.todos" ON "users.todos"."user_id" = "users"."id" WHERE "todos"."title" = $1"#
+        )
+
+        let managers = MemberModel.query().with(\.manager, .joined) { $0.with(\.manager, .joined) }.render()
+        #expect(
+            managers.sql
+                == #"SELECT "members".*, "members.manager"."id" AS "manager.id", "members.manager"."name" AS "manager.name", "members.manager"."organization_id" AS "manager.organization_id", "members.manager"."manager_id" AS "manager.manager_id", "members.manager.manager"."id" AS "manager.manager.id", "members.manager.manager"."name" AS "manager.manager.name", "members.manager.manager"."organization_id" AS "manager.manager.organization_id", "members.manager.manager"."manager_id" AS "manager.manager.manager_id" FROM "members" LEFT JOIN "members" AS "members.manager" ON "members.manager"."id" = "members"."manager_id" LEFT JOIN "members" AS "members.manager.manager" ON "members.manager.manager"."id" = "members.manager"."manager_id""#
+        )
     }
 
     /// A comparison on a nullable column is `Expr<Bool?>`, and queries, updates and deletes filter by it.

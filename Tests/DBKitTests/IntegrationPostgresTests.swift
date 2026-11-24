@@ -24,6 +24,50 @@ import Testing
         }
     }
 
+    @Test func renamedColumnsRoundtripThroughCrudFiltersAndJoinedLoads() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let parent = try await seedRenamedParent(on: tx, kind: "primary", externalReference: "ref-1", label: "Example")
+            #expect(parent.kind == "primary")
+            #expect(parent.externalReference == "ref-1")
+            #expect(parent.label == "Example")
+
+            let child = try await seedRenamedChild(on: tx, parentID: parent.id, kind: "child", rankKey: 10)
+            #expect(child.kind == "child")
+            #expect(child.rankKey == 10)
+
+            let filtered = try #require(
+                try await RenamedParentModel.query()
+                    .filter(RenamedParentModel.kind == "primary")
+                    .filter(RenamedParentModel.externalReference == "ref-1")
+                    .first(on: tx))
+            #expect(filtered.id == parent.id)
+            #expect(filtered.kind == "primary")
+
+            let updatedRows = try await RenamedParentModel.update()
+                .set(RenamedParentModel.kind, to: "secondary")
+                .set(RenamedParentModel.externalReference, to: "ref-2")
+                .filter(RenamedParentModel.id == parent.id)
+                .returningAll()
+                .all(on: tx)
+            #expect(updatedRows.count == 1)
+            let updated = try #require(updatedRows.first)
+            #expect(updated.kind == "secondary")
+            #expect(updated.externalReference == "ref-2")
+
+            let loaded = try #require(
+                try await RenamedParentModel.query()
+                    .filter(RenamedParentModel.id == parent.id)
+                    .with(\.children, .joined)
+                    .first(on: tx))
+            #expect(loaded.kind == "secondary")
+            #expect(loaded.externalReference == "ref-2")
+            #expect(loaded.children.count == 1)
+            #expect(loaded.children.first?.kind == "child")
+            #expect(loaded.children.first?.rankKey == 10)
+        }
+    }
+
     @Test func insertManyInsertsMultipleRows() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -158,6 +202,125 @@ import Testing
         }
     }
 
+    @Test func joinedHasManyLoadsChildren() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Joined", email: "joined@db.com")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Joined A")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Joined B")
+
+            let users: [UserModel.Loaded<[TodoModel]>] = try await UserModel.query()
+                .filter(UserModel.id == user.id)
+                .with(\.todos, .joined)
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users[0].todos.map(\.title).sorted() == ["Joined A", "Joined B"])
+        }
+    }
+
+    @Test func joinedHasManyIncludesEmptyChildren() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Empty", email: "empty@db.com")
+
+            let users: [UserModel.Loaded<[TodoModel]>] = try await UserModel.query()
+                .filter(UserModel.id == user.id)
+                .with(\.todos, .joined)
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users[0].todos.isEmpty)
+        }
+    }
+
+    @Test func joinedHasManyFiltersChildrenWhenJoinFiltered() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Filter", email: "filter@db.com")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Keep")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Drop")
+
+            let users: [UserModel.Loaded<[TodoModel]>] = try await UserModel.query()
+                .join(\.todos)
+                .filter(TodoModel.title == "Keep")
+                .distinct()
+                .with(\.todos, .joined)
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users[0].todos.count == 1)
+            #expect(users[0].todos.first?.title == "Keep")
+        }
+    }
+
+    @Test func joinedBelongsToLoadsParent() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Joined Parent", email: "joined-parent@db.com")
+            let todo = try await seedTodo(on: tx, userID: user.id, title: "Joined child")
+
+            let todos: [TodoModel.Loaded<UserModel?, NotLoaded>] = try await TodoModel.query()
+                .filter(TodoModel.id == todo.id)
+                .with(\.user, .joined)
+                .all(on: tx)
+
+            #expect(todos.count == 1)
+            let loaded = try #require(todos[0].user)
+            #expect(loaded.id == user.id)
+            #expect(loaded.email == "joined-parent@db.com")
+        }
+    }
+
+    @Test func joinedNestedFiltersChildrenWhenJoinFiltered() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Nested", email: "nested@db.com")
+            let todoKeep = try await seedTodo(on: tx, userID: user.id, title: "Keep")
+            let todoDrop = try await seedTodo(on: tx, userID: user.id, title: "Drop")
+            let tagA = try await seedTag(on: tx, name: "A")
+            let tagB = try await seedTag(on: tx, name: "B")
+            try await seedTodoTag(on: tx, todoID: todoKeep.id, tagID: tagA.id)
+            try await seedTodoTag(on: tx, todoID: todoDrop.id, tagID: tagB.id)
+
+            let users: [UserModel.Loaded<[TodoModel.Loaded<NotLoaded, [TagModel]>]>] = try await UserModel.query()
+                .join(\.todos)
+                .filter(TodoModel.title == "Keep")
+                .distinct()
+                .with(\.todos, .joined) { $0.with(\.tags, .joined) }
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users[0].todos.count == 1)
+            #expect(users[0].todos.first?.title == "Keep")
+            #expect(users[0].todos.first?.tags.count == 1)
+            #expect(users[0].todos.first?.tags.first?.name == "A")
+        }
+    }
+
+    @Test func joinedManyToManyFiltersChildrenWhenJoinFiltered() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Tags", email: "tags@db.com")
+            let todo = try await seedTodo(on: tx, userID: user.id, title: "Tagged")
+            let tagA = try await seedTag(on: tx, name: "A")
+            let tagB = try await seedTag(on: tx, name: "B")
+            try await seedTodoTag(on: tx, todoID: todo.id, tagID: tagA.id)
+            try await seedTodoTag(on: tx, todoID: todo.id, tagID: tagB.id)
+
+            let todos: [TodoModel.Loaded<NotLoaded, [TagModel]>] = try await TodoModel.query()
+                .join(\.tags)
+                .filter(TagModel.name == "A")
+                .distinct()
+                .with(\.tags, .joined)
+                .all(on: tx)
+
+            #expect(todos.count == 1)
+            #expect(todos[0].tags.count == 1)
+            #expect(todos[0].tags.first?.name == "A")
+        }
+    }
+
     @Test func nestedSelectinLoads() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -173,6 +336,26 @@ import Testing
             #expect(users[0].todos.count == 1)
             let nestedUser = try #require(users[0].todos[0].user)
             #expect(nestedUser.id == user.id)
+        }
+    }
+
+    @Test func joinFilterOnChildTable() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let userKeep = try await seedUser(on: tx, name: "Keep", email: "keep@db.com")
+            let userDrop = try await seedUser(on: tx, name: "Drop", email: "drop@db.com")
+            _ = try await seedTodo(on: tx, userID: userKeep.id, title: "Keep me")
+            _ = try await seedTodo(on: tx, userID: userKeep.id, title: "Also me")
+            _ = try await seedTodo(on: tx, userID: userDrop.id, title: "Ignore me")
+
+            let users = try await UserModel.query()
+                .join(\.todos)
+                .filter(TodoModel.title == "Keep me")
+                .distinct()
+                .all(on: tx)
+
+            #expect(users.count == 1)
+            #expect(users.first?.id == userKeep.id)
         }
     }
 
@@ -219,6 +402,24 @@ import Testing
             #expect(todosA.map(\.title).sorted() == ["First"])
             let todosB = try #require(tags.first { $0.id == tagB.id }).todos
             #expect(todosB.map(\.title).sorted() == ["First", "Second"])
+        }
+    }
+
+    @Test func manyToManyJoinFilter() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Joiner", email: "joiner@db.com")
+            let todo1 = try await seedTodo(on: tx, userID: user.id, title: "First")
+            let todo2 = try await seedTodo(on: tx, userID: user.id, title: "Second")
+            let tagA = try await seedTag(on: tx, name: "A")
+            let tagB = try await seedTag(on: tx, name: "B")
+            try await seedTodoTag(on: tx, todoID: todo1.id, tagID: tagA.id)
+            try await seedTodoTag(on: tx, todoID: todo2.id, tagID: tagB.id)
+
+            let todos = try await TodoModel.query().join(\.tags).filter(TagModel.name == "B").distinct().all(on: tx)
+
+            #expect(todos.count == 1)
+            #expect(todos.first?.id == todo2.id)
         }
     }
 
@@ -950,6 +1151,10 @@ import Testing
             let minAmount: Int64?
             let maxAmount: Int64?
         }
+        struct UserTodoAggregate: Decodable {
+            let name: String
+            let todoCount: Int64
+        }
 
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -1044,7 +1249,19 @@ import Testing
             #expect(emptyExtrema.minAmount == nil)
             #expect(emptyExtrema.maxAmount == nil)
 
-            // Waits for slice 18: the todo count per user name through `join(\.todos)`, 2 for the one user with two todos.
+            // `join(_:)` belongs to model queries, so it comes before `select`, where rust-dbkit joins after `select_only`.
+            let user = try await seedUser(on: tx, name: "AggUser", email: "agg@db.com")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Alpha")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Beta")
+            let joinedRows = try await UserModel.query()
+                .join(\.todos)
+                .select(UserModel.name.as("name"), SQL.count(TodoModel.id).as("todo_count"))
+                .groupBy(UserModel.name)
+                .orderBy(UserModel.name.desc)
+                .all(as: UserTodoAggregate.self, on: tx)
+            #expect(joinedRows.count == 1)
+            #expect(joinedRows.first?.name == "AggUser")
+            #expect(joinedRows.first?.todoCount == 2)
         }
     }
 
@@ -2396,6 +2613,12 @@ private func setupSchema(on tx: Transaction) async throws {
     try await tx.query(
         "CREATE TEMP TABLE func_rows (id BIGSERIAL PRIMARY KEY, email TEXT, backup_email TEXT, region TEXT, starts_at TIMESTAMP NOT NULL)")
     try await tx.query("CREATE TEMP TABLE text_samples (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, body TEXT)")
+    try await tx.query(
+        "CREATE TEMP TABLE renamed_parents (id BIGSERIAL PRIMARY KEY, type TEXT NOT NULL, external_ref TEXT NOT NULL, label TEXT NOT NULL, UNIQUE (type))"
+    )
+    try await tx.query(
+        "CREATE TEMP TABLE renamed_children (id BIGSERIAL PRIMARY KEY, parent_id BIGINT NOT NULL, type TEXT NOT NULL, sort_key BIGINT NOT NULL)"
+    )
 }
 
 private func seedFuncRow(on tx: Transaction, email: String?, backupEmail: String?, region: String?, startsAt: Date) async throws
@@ -2451,4 +2674,18 @@ private func runPayloads(_ targetID: Int64, _ runID: Int64, on tx: Transaction) 
 
 private func orderLine(_ orderID: Int64, _ lineID: Int64, on tx: Transaction) async throws -> OrderLineModel? {
     try await OrderLineModel.query().filter(OrderLineModel.orderID == orderID).filter(OrderLineModel.lineID == lineID).first(on: tx)
+}
+
+private func seedRenamedParent(on tx: Transaction, kind: String, externalReference: String, label: String) async throws
+    -> RenamedParentModel
+{
+    try #require(
+        try await RenamedParentModel.insert(RenamedParentModel.Insert(kind: kind, externalReference: externalReference, label: label))
+            .returningAll().first(on: tx))
+}
+
+private func seedRenamedChild(on tx: Transaction, parentID: Int64, kind: String, rankKey: Int64) async throws -> RenamedChildModel {
+    try #require(
+        try await RenamedChildModel.insert(RenamedChildModel.Insert(parentID: parentID, kind: kind, rankKey: rankKey)).returningAll()
+            .first(on: tx))
 }

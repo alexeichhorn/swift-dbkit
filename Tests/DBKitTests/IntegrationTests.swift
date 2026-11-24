@@ -118,8 +118,15 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             #expect(users[0].todos[0].tags.map(\.name) == ["home", "urgent"])
             #expect(users[1].todos.isEmpty)
 
-            // Waits for slice 18: the same load with `.joined` at both levels, and
-            // `.with(\.todos, .joined).filter(TodoModel.title == "Ship it")` loading only that todo.
+            let joined = try await UserModel.query().orderBy(UserModel.id.asc).with(\.todos, .joined) { $0.with(\.tags, .joined) }.all(
+                on: tx)
+            #expect(joined.map(\.name) == ["Alex", "Sam"])
+            #expect(Set(joined[0].todos.map(\.title)) == ["Buy milk", "Ship it"])
+            #expect(Set(joined[0].todos.flatMap(\.tags).map(\.name)) == ["home", "urgent"])
+
+            // A filter on the joined table also limits the loaded children.
+            let filtered = try await UserModel.query().with(\.todos, .joined).filter(TodoModel.title == "Ship it").all(on: tx)
+            #expect(filtered.map { $0.todos.map(\.title) } == [["Ship it"]])
 
             // Waits for slice 20: this query filtered by `TodoModel.Relations.user.name == "Alex"`.
             let todos = try await TodoModel.query()
@@ -135,6 +142,94 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             #expect(plain.id == withUser.id)
             #expect(ownerName(of: withUser) == "Alex")
             #expect(try await UserModel.find(alex.id, on: tx)?.email == "alex@example.com")
+        }
+    }
+
+    /// Joined rows decode into the tree in the query's order, each parent and child once. Joined and select-in loads
+    /// mix on one query and across levels, and a select-in level through a join model keeps a child shared by two
+    /// parents once for each.
+    @Test func joinedAndSelectInLoadsMixOnOneQueryAndAcrossLevels() async throws {
+        try await withRollback { tx in
+            _ = try await seedTodos(on: tx)
+
+            let ordered = try await UserModel.query()
+                .with(\.todos, .joined) { $0.with(\.tags, .joined) }
+                .orderBy(UserModel.id.asc, TodoModel.title.desc, TagModel.name.desc)
+                .all(on: tx)
+            #expect(ordered.map(\.name) == ["Alex", "Sam"])
+            #expect(ordered[0].todos.map(\.title) == ["Ship it", "Buy milk"])
+            #expect(ordered[0].todos.map { $0.tags.map(\.name) } == [[], ["urgent", "home"]])
+            #expect(ordered[1].todos.isEmpty)
+
+            let selectInTags = try await UserModel.query()
+                .orderBy(UserModel.id.asc, TodoModel.id.asc)
+                .with(\.todos, .joined) { $0.with(\.tags) }
+                .all(on: tx)
+            #expect(selectInTags.map { $0.todos.map(\.title) } == [["Buy milk", "Ship it"], []])
+            #expect(selectInTags[0].todos.map { $0.tags.map(\.name) } == [["home", "urgent"], []])
+
+            let tags: [TagModel.Loaded<[TodoModel.Loaded<UserModel?, NotLoaded>]>] = try await TagModel.query()
+                .orderBy(TagModel.id.asc)
+                .with(\.todos) { $0.with(\.user, .joined) }
+                .all(on: tx)
+            #expect(tags.map { $0.todos.map(\.title) } == [["Buy milk"], ["Buy milk"]])
+            #expect(tags.map { $0.todos.map { $0.user?.name } } == [["Alex"], ["Alex"]])
+
+            let todos = try await TodoModel.query().orderBy(TodoModel.id.asc).with(\.tags).with(\.user, .joined).all(on: tx)
+            #expect(todos.map { $0.user?.name } == ["Alex", "Alex"])
+            #expect(todos.map { $0.tags.map(\.name) } == [["home", "urgent"], []])
+
+            let owners = try await TodoModel.query().orderBy(TodoModel.id.asc).with(\.user, .joined) { $0.with(\.todos) }.all(on: tx)
+            #expect(owners.map { $0.user?.todos.map(\.title) } == [["Buy milk", "Ship it"], ["Buy milk", "Ship it"]])
+        }
+    }
+
+    /// A self-reference loads through aliased joins at every level, and a missing parent stays `nil`.
+    @Test func joinedLoadsFollowSelfReferencesAndKeepMissingParents() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE TEMP TABLE organizations (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL)")
+            try await tx.query(
+                "CREATE TEMP TABLE members (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, organization_id BIGINT NOT NULL, manager_id BIGINT)"
+            )
+            let acme = try #require(try await OrganizationModel.insert(OrganizationModel.Insert(name: "Acme")).returningAll().first(on: tx))
+            let alex = try #require(
+                try await MemberModel.insert(MemberModel.Insert(name: "Alex", organizationID: acme.id)).returningAll().first(on: tx))
+            let sam = try #require(
+                try await MemberModel.insert(MemberModel.Insert(name: "Sam", organizationID: acme.id, managerID: alex.id)).returningAll()
+                    .first(on: tx))
+            try await MemberModel.insert(MemberModel.Insert(name: "Kim", organizationID: acme.id, managerID: sam.id)).execute(on: tx)
+
+            let chains = try await MemberModel.query()
+                .orderBy(MemberModel.id.asc)
+                .with(\.organization, .joined)
+                .with(\.manager, .joined) { $0.with(\.manager, .joined) }
+                .all(on: tx)
+            #expect(chains.map(\.name) == ["Alex", "Sam", "Kim"])
+            #expect(chains.map { $0.manager?.name } == [nil, "Alex", "Sam"])
+            #expect(chains.map { $0.manager?.manager?.name } == [nil, nil, "Alex"])
+            #expect(chains.map { $0.organization?.name } == ["Acme", "Acme", "Acme"])
+        }
+    }
+
+    /// Joins that only filter: a relation joined outer finds rows without children, and a join on another model
+    /// takes any condition, also a nullable one.
+    @Test func explicitJoinsFilterRowsWithoutLoading() async throws {
+        try await withRollback { tx in
+            _ = try await seedTodos(on: tx)
+
+            let childless = try await UserModel.query().leftJoin(\.todos).filter(TodoModel.id.isNull).all(on: tx)
+            #expect(childless.map(\.name) == ["Sam"])
+
+            let dueToday = try await UserModel.query()
+                .join(TodoModel.self, on: TodoModel.userID == UserModel.id && TodoModel.note == "today")
+                .all(on: tx)
+            #expect(dueToday.map(\.name) == ["Alex"])
+
+            let notDueToday = try await UserModel.query()
+                .leftJoin(TodoModel.self, on: TodoModel.userID == UserModel.id && TodoModel.note == "today")
+                .filter(TodoModel.id.isNull)
+                .all(on: tx)
+            #expect(notDueToday.map(\.name) == ["Sam"])
         }
     }
 
