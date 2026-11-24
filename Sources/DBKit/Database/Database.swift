@@ -3,6 +3,7 @@ import Logging
 import NIOSSL
 import PostgresNIO
 import ServiceLifecycle
+import Synchronization
 
 /// A connection pool, usable as a ``DatabaseExecutor`` and as a swift-service-lifecycle `Service`.
 ///
@@ -64,6 +65,37 @@ public final class Database: DatabaseExecutor, Service {
     }
 }
 
+extension Database: CursorExecutor {
+    /// Takes one pooled connection and keeps it until `release` is called. The pool lends a connection only to a
+    /// closure, so a task of its own stays in that closure for as long as the cursor reads.
+    func cursorConnection() async throws -> CursorConnection {
+        let lease = Mutex<Task<Void, Never>?>(nil)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { leased in
+                let task = Task { [client] in
+                    do {
+                        try await client.withConnection { connection in
+                            let released = connection.eventLoop.makePromise(of: Void.self)
+                            let release: @Sendable () -> Void = { released.succeed() }
+                            leased.resume(returning: CursorConnection(connection: connection, ownsTransaction: true, release: release))
+                            // Waits through a cancellation, so only `release` ends the lease.
+                            try? await released.futureResult.get()
+                        }
+                    } catch {
+                        leased.resume(throwing: error)
+                    }
+                }
+                lease.withLock { $0 = task }
+                // A cancellation before this point found no task to cancel.
+                if Task.isCancelled { task.cancel() }
+            }
+        } onCancel: {
+            // Stops the wait for a free connection. A connection that is already lent stays lent.
+            lease.withLock { $0 }?.cancel()
+        }
+    }
+}
+
 /// An open transaction, passed to the closure of ``Database/transaction(isolation:_:)``.
 public struct Transaction: DatabaseExecutor {
     /// The transaction's connection, for raw PostgresNIO access.
@@ -81,6 +113,12 @@ public struct Transaction: DatabaseExecutor {
     /// other users of the pooled connection: `try await tx.setLocal("statement_timeout", "5s")`.
     public func setLocal(_ name: String, _ value: String) async throws {
         _ = try await query("SELECT set_config(\(name), \(value), true)").collect()
+    }
+}
+
+extension Transaction: CursorExecutor {
+    func cursorConnection() -> CursorConnection {
+        CursorConnection(connection: connection, ownsTransaction: false)
     }
 }
 

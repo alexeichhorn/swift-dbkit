@@ -13,14 +13,7 @@ public struct Projection<each Value: SQLType>: SelectQuery {
     }
 
     public func all(on executor: some DatabaseExecutor) async throws -> [(repeat each Value)] {
-        try await executor.rows(render()) { row in
-            var index = 0
-            func next<V: SQLType>(_ type: V.Type) throws -> V {
-                defer { index += 1 }
-                return try V.decode(from: row[index])
-            }
-            return (repeat try next((each Value).self))
-        }
+        try await executor.rows(render(), Self.decodeRow)
     }
 
     /// The first row (`LIMIT 1`). Aggregates without `GROUP BY` always return one row.
@@ -35,6 +28,35 @@ public struct Projection<each Value: SQLType>: SelectQuery {
 
     public func first<T: Decodable>(as type: T.Type, on executor: some DatabaseExecutor) async throws -> T? {
         try await limit(1).all(as: type, on: executor).first
+    }
+
+    /// Streams rows through a server-side cursor, like ``Query/stream(on:)-(Database)``.
+    public func stream(on database: Database) async throws -> RowStream<(repeat each Value)> {
+        RowStream(query: try database.postgresQuery(render()), executor: database, decode: Self.decodeRow)
+    }
+
+    /// Streams rows on the transaction's connection, like ``Query/stream(on:)-(Transaction)``.
+    public func stream(on transaction: Transaction) async throws -> RowStream<(repeat each Value)> {
+        RowStream(query: try transaction.postgresQuery(render()), executor: transaction, decode: Self.decodeRow)
+    }
+
+    /// Streams rows decoded into `T`, as ``all(as:on:)`` does.
+    public func stream<T: Decodable & SendableMetatype>(as type: T.Type, on database: Database) async throws -> RowStream<T> {
+        RowStream(query: try database.postgresQuery(render()), executor: database) { try T(from: RowDecoder(row: $0)) }
+    }
+
+    public func stream<T: Decodable & SendableMetatype>(as type: T.Type, on transaction: Transaction) async throws -> RowStream<T> {
+        RowStream(query: try transaction.postgresQuery(render()), executor: transaction) { try T(from: RowDecoder(row: $0)) }
+    }
+
+    /// Decodes one value per column, in select-list order.
+    private static func decodeRow(_ row: PostgresRandomAccessRow) throws -> (repeat each Value) {
+        var index = 0
+        func next<V: SQLType>(_ type: V.Type) throws -> V {
+            defer { index += 1 }
+            return try V.decode(from: row[index])
+        }
+        return (repeat try next((each Value).self))
     }
 }
 
@@ -73,15 +95,29 @@ public struct ProjectionQuery<Row: Sendable>: SelectQuery {
     }
 
     public func all(on executor: some DatabaseExecutor) async throws -> [Row] {
-        try await executor.rows(render()) { row in
-            var reader = ProjectionReader(row: row)
-            return try decode(&reader)
-        }
+        try await executor.rows(render(), decodeRow)
     }
 
     /// The first row (`LIMIT 1`). Aggregates without `GROUP BY` always return one row.
     public func first(on executor: some DatabaseExecutor) async throws -> Row? {
         try await limit(1).all(on: executor).first
+    }
+
+    /// Streams rows through a server-side cursor, like ``Query/stream(on:)-(Database)``.
+    public func stream(on database: Database) async throws -> RowStream<Row> {
+        RowStream(query: try database.postgresQuery(render()), executor: database, decode: decodeRow)
+    }
+
+    /// Streams rows on the transaction's connection, like ``Query/stream(on:)-(Transaction)``.
+    public func stream(on transaction: Transaction) async throws -> RowStream<Row> {
+        RowStream(query: try transaction.postgresQuery(render()), executor: transaction, decode: decodeRow)
+    }
+
+    private var decodeRow: @Sendable (PostgresRandomAccessRow) throws -> Row {
+        { [decode] row in
+            var reader = ProjectionReader(row: row)
+            return try decode(&reader)
+        }
     }
 }
 

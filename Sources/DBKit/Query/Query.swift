@@ -100,6 +100,24 @@ extension Query where Row == Row.Base {
     ) -> Query<Nested.Output> where Nested.Source == Row {
         Query<Nested.Output>(statement: statement, plan: plan.adding(nested(Row.Relations.self[keyPath: relation]), strategy))
     }
+
+    /// Streams rows through a server-side cursor instead of collecting an array. Eager loading isn't supported.
+    ///
+    /// Rows are fetched 1,000 at a time, and leaving the loop stops fetching. From its first row until it ends or
+    /// is dropped, the stream holds a pooled connection and its own transaction on it.
+    public func stream(on database: Database) async throws -> RowStream<Row> {
+        RowStream(query: try database.postgresQuery(render()), executor: database) {
+            try Row.decodeBase(from: RowReader(row: $0, prefix: ""))
+        }
+    }
+
+    /// Streams rows like ``stream(on:)-(Database)``, on the transaction's connection. The transaction stays open
+    /// when the stream ends.
+    public func stream(on transaction: Transaction) async throws -> RowStream<Row> {
+        RowStream(query: try transaction.postgresQuery(render()), executor: transaction) {
+            try Row.decodeBase(from: RowReader(row: $0, prefix: ""))
+        }
+    }
 }
 
 extension Query where Row: LoadedModel {
