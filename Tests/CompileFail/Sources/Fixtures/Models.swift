@@ -102,3 +102,24 @@ class UnicodeSampleModel {
     var codepoint: Int32
     var nullableCodepoint: Int32?
 }
+
+/// rust-dbkit's `EmbeddingRow` of the `*pgvector*` fixtures.
+@Model(table: "embedding_rows")
+class EmbeddingRowModel {
+    @Key var id: Int64
+    var label: String
+    var embedding: Vector<3>
+    var embeddingOptional: Vector<3>?
+}
+
+/// rust-dbkit's `Embedding` of the `fail_extended_pgvector_*` fixtures, with the columns of all four.
+@Model(table: "embeddings")
+class VectorKindsModel {
+    @Key var id: Int64
+    var dense: Vector<3>
+    var half: HalfVector<3>
+    var sparse: SparseVector<3>
+    var optionalSparse: SparseVector<3>?
+    var bits: BitVector<3>
+    var optionalBits: BitVector<3>?
+}

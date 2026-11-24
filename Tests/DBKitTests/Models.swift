@@ -246,3 +246,19 @@ class BlobRowModel {
     var data: Data
     var dataOptional: Data?
 }
+
+@Model(table: "embeddings")
+class EmbeddingModel {
+    @Key @AutoIncrement var id: Int64
+    var embedding: Vector<3>
+    var compact: HalfVector<3>?
+}
+
+/// rust-dbkit's `embedding_rows` of both `vector_support.rs` and `integration_pgvector.rs`.
+@Model(table: "embedding_rows")
+class EmbeddingRowModel {
+    @Key var id: Int64
+    var label: String
+    var embedding: Vector<3>
+    var embeddingOptional: Vector<3>?
+}

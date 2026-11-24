@@ -904,6 +904,20 @@ class LeaseModel {
             _ = try? await UserModel.query().paginate(page: 1, perPage: 0, on: FirstQueryExecutor())
         }
     }
+
+    @Test func vectorDistancesBindWithPlaceholderCasts() throws {
+        let query = try Vector<3>([1, 0, 0])
+        let rendered = EmbeddingModel.query()
+            .filter(EmbeddingModel.embedding.cosineDistance(to: query) < 0.1)
+            .orderBy(EmbeddingModel.embedding.l2Distance(to: query).asc, EmbeddingModel.embedding.innerProductDistance(to: query).asc)
+            .limit(5)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "embeddings".* FROM "embeddings" WHERE ("embeddings"."embedding" <=> $1::vector) < $2 ORDER BY ("embeddings"."embedding" <-> $3::vector) ASC, ("embeddings"."embedding" <#> $4::vector) ASC LIMIT 5"#
+        )
+        #expect(rendered.binds.first?.description == "[1.0,0.0,0.0]")
+    }
 }
 
 private func countSQL<Row>(_ query: Query<Row>) async throws -> String {

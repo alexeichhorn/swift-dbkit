@@ -40,6 +40,9 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - A relation path inside a subquery joins under its own alias when an enclosing query already uses the table's name, so it no longer hides the outer row it is compared with
 - A column of a model that an enclosing query reaches through a relation join binds to the nearest such join, as rust-dbkit resolves it
 - A join added by a relation path is placed before a custom `join(_:on:)` whose condition refers to it
+- Vector distances take a nullable vector on either side, giving a nullable distance
+- `HalfVector` rounds its values to half precision when it is created, so a value equals the row read back, and rejects dimensions outside 1 to 16000
+- The text decoders of the vector types reject input without its brackets
 
 ## Left Out
 
@@ -116,6 +119,9 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `dbkit/type_support.rs::build_arguments_accepts_json` | PostgresNIO binds every `SQLValue`; `jsonColumnRoundtrip` sends a payload of the same shape to PostgreSQL. |
 | `dbkit/type_support.rs::build_arguments_accepts_bytea` | PostgresNIO binds every `SQLValue`; `byteaRoundtripFilterAndActiveModelNulling` sends the same bytes to PostgreSQL. |
 | `dbkit/type_support.rs::build_arguments_accepts_interval` | PostgresNIO binds every `SQLValue`; `intervalRoundtripsThroughInsertFilterAndUpdate` sends the same interval to PostgreSQL. |
+| `dbkit-core/vector_support.rs::value_from_pgvector` | A value becomes a bind when a query uses it; `selectBindsPgvectorEqAndNullFilters` binds a vector. |
+| `dbkit/vector_support.rs::build_arguments_accepts_pgvector` | PostgresNIO binds every `SQLValue`; `pgvectorRoundtripEqFilterAndActiveModelNulling` sends vectors to PostgreSQL. |
+| `extended_vector_support.rs::half_vector_try_from_native_vec_validates_lengths_dimensions_and_finite_values` | `HalfVector` takes `Float` values only, so there is no conversion from native half values to validate; `halfVectorTryFromF32VecRejectsWrongLengthsNonFiniteValuesAndOverflow` checks the same lengths, dimensions and non-finite values. |
 | `ui/fail_nullable_model_field_type_alias.rs` | rust-dbkit's macro tells nullable fields by their syntax and rejects an alias of `Option`. Swift's type checker resolves `typealias OptionalText = String?`, so `@Model` accepts the alias as a nullable column. |
 | `bitwise_sql.rs::compiles_custom_integer_backed_type_without_exposing_its_storage_type` | Custom integer-backed types in bitwise expressions are left out. |
 | `bitwise_integration.rs::custom_integer_backed_type_filters_and_roundtrips` | Custom integer-backed types in bitwise expressions are left out. |
