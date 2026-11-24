@@ -910,4 +910,69 @@ class CompilerWindowRowModel {
         #expect(rendered.binds.map(\.description) == ["::", "SUFFIX", "::", "1", "::", "1", "prefix", "::", #"["prefix"]"#, "::"])
         #expect(rendered.binds[8].value as? [String] == ["prefix"])
     }
+
+    /// The flags bind as PostgreSQL's flag string: `g` before `i`, and `''` for no flags. A nullable text, pattern or
+    /// replacement makes the result nullable.
+    @Test func compilesRegexReplaceWithOptionSetFlagsAndNullableTextArguments() {
+        let replacedLiteral: Expr<String> = SQL.regexReplace("a1b22", #"\d+"#, "X", [.global, .caseInsensitive])
+        let nullableSource: Expr<String?> = SQL.regexReplace(TS.body, #"\s+"#, " ", [])
+        let nullablePattern: Expr<String?> = SQL.regexReplace(TS.title, TS.body, "X", [])
+        let nullableReplacement: Expr<String?> = SQL.regexReplace(TS.title, "a", TS.body, .caseInsensitive)
+
+        let rendered = TS.query()
+            .select(
+                replacedLiteral.as("replaced_literal"),
+                nullableSource.as("nullable_source"),
+                nullablePattern.as("nullable_pattern"),
+                nullableReplacement.as("nullable_replacement")
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT REGEXP_REPLACE($1, $2, $3, $4) AS "replaced_literal", REGEXP_REPLACE("text_samples"."body", $5, $6, $7) AS "nullable_source", REGEXP_REPLACE("text_samples"."title", "text_samples"."body", $8, $9) AS "nullable_pattern", REGEXP_REPLACE("text_samples"."title", $10, "text_samples"."body", $11) AS "nullable_replacement" FROM "text_samples""#
+        )
+        #expect(rendered.binds.map(\.description) == ["a1b22", #"\d+"#, "X", "gi", #"\s+"#, " ", "", "X", "", "a", "i"])
+    }
+
+    /// A nullable text or pattern makes the result nullable.
+    @Test func compilesRegexSplitWithOptionSetFlagsAndNullableTextArguments() {
+        let splitLiteral: Expr<[String]> = SQL.regexSplit("a,b;c", "[,;]", [])
+        let nullableSource: Expr<[String]?> = SQL.regexSplit(TS.body, #"\s+"#, .caseInsensitive)
+        let nullablePattern: Expr<[String]?> = SQL.regexSplit(TS.title, TS.body, [])
+
+        let rendered = TS.query()
+            .select(splitLiteral.as("split_literal"), nullableSource.as("nullable_source"), nullablePattern.as("nullable_pattern"))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT REGEXP_SPLIT_TO_ARRAY($1, $2, $3) AS "split_literal", REGEXP_SPLIT_TO_ARRAY("text_samples"."body", $4, $5) AS "nullable_source", REGEXP_SPLIT_TO_ARRAY("text_samples"."title", "text_samples"."body", $6) AS "nullable_pattern" FROM "text_samples""#
+        )
+        #expect(rendered.binds.map(\.description) == ["a,b;c", "[,;]", "", #"\s+"#, "i", ""])
+    }
+
+    @Test func compilesNestedRegexTransformsInProjectionFilterAndOrderingWithBoundArguments() {
+        let pattern = #"(['%_\\]+)"#
+        let replacement = #"<\1>$1'%_\\"#
+        let normalizedBody: Expr<String?> = SQL.regexReplace(
+            SQL.lower(SQL.trim(SQL.substring(TS.body, 1, 99))), #"\s+"#, "-", .global)
+
+        let rendered = TS.query()
+            .select(
+                SQL.regexReplace(SQL.lower(SQL.trim(TS.title)), SQL.lower(pattern), replacement, [.global, .caseInsensitive])
+                    .as("replaced"),
+                SQL.regexSplit(normalizedBody, pattern, []).as("parts")
+            )
+            .filter(normalizedBody == "aa-bb")
+            .orderBy(SQL.regexSplit(SQL.trim(TS.body), #"\s+"#, []).asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT REGEXP_REPLACE(LOWER(TRIM("text_samples"."title")), LOWER($1), $2, $3) AS "replaced", REGEXP_SPLIT_TO_ARRAY(REGEXP_REPLACE(LOWER(TRIM(SUBSTRING("text_samples"."body", $4, $5))), $6, $7, $8), $9, $10) AS "parts" FROM "text_samples" WHERE REGEXP_REPLACE(LOWER(TRIM(SUBSTRING("text_samples"."body", $11, $12))), $13, $14, $15) = $16 ORDER BY REGEXP_SPLIT_TO_ARRAY(TRIM("text_samples"."body"), $17, $18) ASC"#
+        )
+        #expect(
+            rendered.binds.map(\.description) == [
+                pattern, replacement, "gi", "1", "99", #"\s+"#, "-", "g", pattern, "", "1", "99", #"\s+"#, "-", "g", "aa-bb",
+                #"\s+"#, "",
+            ])
+    }
 }

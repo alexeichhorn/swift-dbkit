@@ -72,3 +72,24 @@ class SaleModel {
     var region: String
     var amount: Int64
 }
+
+/// rust-dbkit's `RegexSample` of the `*regex_inspection*` fixtures.
+@Model(table: "regex_samples")
+class RegexSampleModel {
+    @Key var id: Int64
+    var source: String
+    var pattern: String
+    var nullableSource: String?
+    var nullablePattern: String?
+    var number: Int32
+}
+
+/// rust-dbkit's `UnicodeSample` of the `*unicode_character*` fixtures.
+@Model(table: "unicode_samples")
+class UnicodeSampleModel {
+    @Key var id: Int64
+    var text: String
+    var nullableText: String?
+    var codepoint: Int32
+    var nullableCodepoint: Int32?
+}

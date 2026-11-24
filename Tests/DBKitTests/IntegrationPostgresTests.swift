@@ -2064,6 +2064,206 @@ import Testing
             #expect(result.3 == "right")
         }
     }
+
+    @Test func regexReplaceFollowsPostgreSQLMatchReplacementAndFlagSemantics() async throws {
+        struct RegexReplaceBoundaryResult: Decodable {
+            let firstMatch: String
+            let global: String
+            let noMatch: String
+            let emptySource: String
+            let emptyPatternFirst: String
+            let emptyPatternGlobal: String
+            let emptyReplacement: String
+            let captureGroups: String
+            let wholeMatch: String
+            let literalBackslash: String
+            let literalDollarQuote: String
+            let caseSensitive: String
+            let caseInsensitive: String
+            let zeroWidth: String
+            let unicode: String
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "regex-replace", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.regexReplace("abcabc", "a.", "X", []).as("first_match"),
+                        SQL.regexReplace("abcabc", "a.", "X", .global).as("global"),
+                        SQL.regexReplace("abc", "z+", "X", []).as("no_match"),
+                        SQL.regexReplace("", "a", "X", []).as("empty_source"),
+                        SQL.regexReplace("abc", "", "X", []).as("empty_pattern_first"),
+                        SQL.regexReplace("abc", "", "X", .global).as("empty_pattern_global"),
+                        SQL.regexReplace("a1b22c", #"\d+"#, "", .global).as("empty_replacement"),
+                        SQL.regexReplace("Ada Lovelace", "([A-Za-z]+) ([A-Za-z]+)", #"\2, \1"#, []).as("capture_groups"),
+                        SQL.regexReplace("abc", "b", #"[\&]"#, []).as("whole_match"),
+                        SQL.regexReplace("abc", "b", #"\\"#, []).as("literal_backslash"),
+                        SQL.regexReplace("abc", "b", "$1'&", []).as("literal_dollar_quote"),
+                        SQL.regexReplace("AaA", "a", "x", .global).as("case_sensitive"),
+                        SQL.regexReplace("AaA", "a", "x", [.global, .caseInsensitive]).as("case_insensitive"),
+                        SQL.regexReplace("ab", "(^|$)", "_", .global).as("zero_width"),
+                        SQL.regexReplace("é🙂é", "[é🙂]", "X", .global).as("unicode")
+                    )
+                    .first(as: RegexReplaceBoundaryResult.self, on: tx))
+
+            #expect(result.firstMatch == "Xcabc")
+            #expect(result.global == "XcXc")
+            #expect(result.noMatch == "abc")
+            #expect(result.emptySource == "")
+            #expect(result.emptyPatternFirst == "Xabc")
+            #expect(result.emptyPatternGlobal == "XaXbXcX")
+            #expect(result.emptyReplacement == "abc")
+            #expect(result.captureGroups == "Lovelace, Ada")
+            #expect(result.wholeMatch == "a[b]c")
+            #expect(result.literalBackslash == "a\\c")
+            #expect(result.literalDollarQuote == "a$1'&c")
+            #expect(result.caseSensitive == "AxA")
+            #expect(result.caseInsensitive == "xxx")
+            #expect(result.zeroWidth == "_ab_")
+            #expect(result.unicode == "XXX")
+        }
+    }
+
+    @Test func regexSplitReturnsExactTextArraysAndSuppressesSpecialZeroWidthMatches() async throws {
+        struct RegexSplitBoundaryResult: Decodable {
+            let normal: [String]
+            let repeated: [String]
+            let adjacent: [String]
+            let edges: [String]
+            let noMatch: [String]
+            let emptySource: [String]
+            let emptyPattern: [String]
+            let zeroWidthStar: [String]
+            let zeroWidthLookahead: [String]
+            let zeroWidthBoundaries: [String]
+            let unicode: [String]
+            let caseSensitive: [String]
+            let caseInsensitive: [String]
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "regex-split", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.regexSplit("one, two;three", "[,;][ ]*", []).as("normal"),
+                        SQL.regexSplit("a,,b;;;c", "[,;]+", []).as("repeated"),
+                        SQL.regexSplit("a,,b", ",", []).as("adjacent"),
+                        SQL.regexSplit(",a,", ",", []).as("edges"),
+                        SQL.regexSplit("abc", ",", []).as("no_match"),
+                        SQL.regexSplit("", ",", []).as("empty_source"),
+                        SQL.regexSplit("abc", "", []).as("empty_pattern"),
+                        SQL.regexSplit("the quick", "[ ]*", []).as("zero_width_star"),
+                        SQL.regexSplit("abc", "(?=b)", []).as("zero_width_lookahead"),
+                        SQL.regexSplit("abc", "(^|$)", []).as("zero_width_boundaries"),
+                        SQL.regexSplit("été🙂hiver", "[é🙂]+", []).as("unicode"),
+                        SQL.regexSplit("aXbxc", "x", []).as("case_sensitive"),
+                        SQL.regexSplit("aXbxc", "x", .caseInsensitive).as("case_insensitive")
+                    )
+                    .first(as: RegexSplitBoundaryResult.self, on: tx))
+
+            #expect(result.normal == ["one", "two", "three"])
+            #expect(result.repeated == ["a", "b", "c"])
+            #expect(result.adjacent == ["a", "", "b"])
+            #expect(result.edges == ["", "a", ""])
+            #expect(result.noMatch == ["abc"])
+            #expect(result.emptySource == [""])
+            #expect(result.emptyPattern == ["a", "b", "c"])
+            #expect(result.zeroWidthStar == ["t", "h", "e", "q", "u", "i", "c", "k"])
+            #expect(result.zeroWidthLookahead == ["a", "bc"])
+            #expect(result.zeroWidthBoundaries == ["abc"])
+            #expect(result.unicode == ["", "t", "hiver"])
+            #expect(result.caseSensitive == ["aXb", "c"])
+            #expect(result.caseInsensitive == ["a", "b", "c"])
+        }
+    }
+
+    @Test func regexTransformsPropagateNullFromEveryNullableTextArgument() async throws {
+        struct NullableRegexTransformResult: Decodable, Equatable {
+            let replaceSource: String?
+            let replacePattern: String?
+            let replaceReplacement: String?
+            let splitSource: [String]?
+            let splitPattern: [String]?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let row = try await seedTextSample(on: tx, label: "abc", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.regexReplace(TextSampleModel.body, "a", "x", []).as("replace_source"),
+                        SQL.regexReplace(TextSampleModel.label, TextSampleModel.body, "x", []).as("replace_pattern"),
+                        SQL.regexReplace(TextSampleModel.label, "a", TextSampleModel.body, []).as("replace_replacement"),
+                        SQL.regexSplit(TextSampleModel.body, ",", []).as("split_source"),
+                        SQL.regexSplit(TextSampleModel.label, TextSampleModel.body, []).as("split_pattern")
+                    )
+                    .filter(TextSampleModel.id == row.id)
+                    .first(as: NullableRegexTransformResult.self, on: tx))
+            #expect(
+                result
+                    == NullableRegexTransformResult(
+                        replaceSource: nil, replacePattern: nil, replaceReplacement: nil, splitSource: nil, splitPattern: nil))
+        }
+    }
+
+    @Test func regexTransformArgumentsRemainBoundAndComposeWithExistingStringFunctions() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let source = "a'%_\\b"
+            let pattern = #"(['%_\\])"#
+            let replacement = #"<\1>$1'\\"#
+            let row = try await seedTextSample(on: tx, label: source, body: "  AA  BB  ")
+            let normalized: Expr<String?> = SQL.regexReplace(
+                SQL.lower(SQL.trim(SQL.substring(TextSampleModel.body, 1, 99))), #"\s+"#, "-", .global)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.regexReplace(TextSampleModel.label, pattern, replacement, .global).as("replaced"),
+                        normalized.as("normalized"),
+                        SQL.regexSplit(normalized, "-", []).as("parts")
+                    )
+                    .filter(TextSampleModel.id == row.id)
+                    .filter(normalized == "aa-bb")
+                    .orderBy(SQL.regexSplit(TextSampleModel.label, "[%_]+", []).asc)
+                    .first(on: tx))
+            #expect(result.0 == "a<'>$1'\\<%>$1'\\<_>$1'\\<\\>$1'\\b")
+            #expect(result.1 == "aa-bb")
+            #expect(result.2 == ["aa", "bb"])
+        }
+    }
+
+    @Test func regexReplaceReportsInvalidPatterns() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "invalid-replace", body: nil)
+
+            let error = try await #require(throws: PSQLError.self) {
+                try await TextSampleModel.query().select(SQL.regexReplace(TextSampleModel.label, "[", "x", []).as("value")).all(on: tx)
+            }
+            #expect(error.serverInfo?[.message]?.contains("invalid regular expression") == true)
+        }
+    }
+
+    @Test func regexSplitReportsInvalidPatterns() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "invalid-split", body: nil)
+
+            let error = try await #require(throws: PSQLError.self) {
+                try await TextSampleModel.query().select(SQL.regexSplit(TextSampleModel.label, "(", []).as("value")).all(on: tx)
+            }
+            #expect(error.serverInfo?[.message]?.contains("invalid regular expression") == true)
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.

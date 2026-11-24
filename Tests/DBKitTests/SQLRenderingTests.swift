@@ -365,6 +365,39 @@ class LeaseModel {
         #expect(rendered.binds.map(\.description) == ["-", "1", ":", "0", "su", "", "8", "0"])
     }
 
+    /// Regex and Unicode functions work in `update().set`, `GROUP BY` and `HAVING`, take aggregates, and nest in the
+    /// other functions. Captures compare with a `RegexCaptures` value, which binds as a text array.
+    @Test func regexAndUnicodeFunctionsInEveryClause() {
+        let update = UserModel.update()
+            .set(UserModel.name, to: SQL.normalize(SQL.regexReplace(UserModel.name, #"\s+"#, " ", .global), .nfkc))
+            .set(UserModel.region, to: SQL.coalesce(SQL.regexExtract(UserModel.email, "@(.+)$"), SQL.caseFold(UserModel.region)))
+            .filter(SQL.regexIsMatch(UserModel.email, "^[a-z]") && SQL.firstCodepoint(UserModel.name) > 64)
+            .render()
+        #expect(
+            update.sql
+                == #"UPDATE "users" SET "name" = NORMALIZE(REGEXP_REPLACE("users"."name", $1, $2, $3), NFKC), "region" = COALESCE(REGEXP_SUBSTR("users"."email", $4), CASEFOLD("users"."region")) WHERE (REGEXP_LIKE("users"."email", $5) AND ASCII("users"."name") > $6)"#
+        )
+        #expect(update.binds.map(\.description) == [#"\s+"#, " ", "g", "@(.+)$", "^[a-z]", "64"])
+
+        let grouped: Projection<[String], Int32, String?> = SaleModel.query()
+            .select(
+                SQL.regexSplit(SQL.toASCII(SaleModel.region), "-", .caseInsensitive).as("parts"),
+                SQL.greatest(SQL.regexCount(SQL.max(SaleModel.region), "u"), 0).as("most_matches"),
+                SQL.fromCodepoint(SQL.regexPosition(SQL.min(SaleModel.region), "s") + 64).as("marker")
+            )
+            .groupBy(SQL.regexSplit(SQL.toASCII(SaleModel.region), "-", .caseInsensitive))
+            .having(SQL.isUnicodeAssigned(SQL.max(SaleModel.region)))
+            .orderBy(SQL.regexCaptures(SQL.min(SaleModel.region), "(u)(x)?").desc)
+            .filter(SQL.regexCaptures(SaleModel.region, "(u)(x)?") == RegexCaptures(["u", nil]))
+        let rendered = grouped.render()
+        #expect(
+            rendered.sql
+                == #"SELECT REGEXP_SPLIT_TO_ARRAY(TO_ASCII("sales"."region"), $1, $2) AS "parts", GREATEST(REGEXP_COUNT(MAX("sales"."region"), $3), $4) AS "most_matches", CHR((REGEXP_INSTR(MIN("sales"."region"), $5) + $6)) AS "marker" FROM "sales" WHERE REGEXP_MATCH("sales"."region", $7) = $8 GROUP BY REGEXP_SPLIT_TO_ARRAY(TO_ASCII("sales"."region"), $9, $10) HAVING UNICODE_ASSIGNED(MAX("sales"."region")) ORDER BY REGEXP_MATCH(MIN("sales"."region"), $11) DESC"#
+        )
+        #expect(rendered.binds[7].value as? RegexCaptures == RegexCaptures(["u", nil]))
+        #expect(RegexCaptures(["u", nil]).groups == ["u", nil])
+    }
+
     /// `groupBy` takes several expressions, `having` predicates combine with `AND`, and aggregates take computed values.
     /// `SQL.countAll()` counts rows.
     @Test func groupingByExpressionsAndAggregatingComputedValues() {

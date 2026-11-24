@@ -59,6 +59,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 
 ## Different On Purpose
 
+- **Regex flags.** `SQL.regexReplace` and `SQL.regexSplit` default their flags to none, so a call without flags replaces the first match and splits case-sensitively. rust-dbkit requires the flags argument.
 - **Counting a query with joins.** rust-dbkit counts the rows of the joined query, so a user with three joined todos counts three times. `count`, `exists` and `paginate` here count distinct rows of the query's own model.
 - **Updating an active model with nothing assigned.** `update(on:)` sends no query and returns the row unchanged. rust-dbkit returns an error.
 - **Changing a key column on an active model.** The update filters by the key the row was loaded with, so assigning a primary key column moves the row to the new key. rust-dbkit never writes key columns and filters by the assigned key, so it reports the row as not found.
@@ -116,3 +117,4 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `sql_compiler.rs::compiles_order_by_alias` | Ordering by a select alias is planned, see "Planned". |
 | `expr_methods_sql.rs::unwrap_or_default_preserves_literal_types` | `unwrap_or_default()` is left out; `??` with an explicit fallback covers it. |
 | `expr_methods_sql.rs::unwrap_or_default_uses_the_types_default_without_requiring_clone` | `unwrap_or_default()` is left out; `??` with an explicit fallback covers it. |
+| `ui/fail_regex_transform_flags_required.rs` | The flags default to none, see "Regex flags" under "Different On Purpose". |
