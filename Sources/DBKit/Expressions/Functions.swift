@@ -195,3 +195,69 @@ public enum SQL {
 public enum DateTruncUnit: String, Sendable {
     case microseconds, milliseconds, second, minute, hour, day, week, month, quarter, year, decade, century, millennium
 }
+
+// MARK: - pgvector
+//
+// Every distance is `double precision`, nullable when either vector is. The two overloads of each distance split on
+// the argument's nullability, so exactly one applies: a required argument keeps the receiver's nullability, and a
+// nullable expression makes the distance nullable.
+
+extension SQLExpression where Value.NonNull: PGVectorType {
+    /// Euclidean distance, pgvector's `<->`. Index-friendly for `ORDER BY … LIMIT`.
+    public func l2Distance(to other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.infix(sqlNode, "<->", other.sqlNode))
+    }
+    public func l2Distance(to other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.infix(sqlNode, "<->", other.sqlNode))
+    }
+
+    /// Cosine distance, pgvector's `<=>` (lower is more similar). Index-friendly for `ORDER BY … LIMIT`.
+    public func cosineDistance(to other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.infix(sqlNode, "<=>", other.sqlNode))
+    }
+    public func cosineDistance(to other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.infix(sqlNode, "<=>", other.sqlNode))
+    }
+
+    /// Negative inner product, pgvector's `<#>` (lower is more similar). Index-friendly for `ORDER BY … LIMIT`.
+    public func innerProductDistance(to other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.infix(sqlNode, "<#>", other.sqlNode))
+    }
+    public func innerProductDistance(to other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.infix(sqlNode, "<#>", other.sqlNode))
+    }
+
+    /// Taxicab distance, pgvector's `<+>`.
+    public func l1Distance(to other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.infix(sqlNode, "<+>", other.sqlNode))
+    }
+    public func l1Distance(to other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.infix(sqlNode, "<+>", other.sqlNode))
+    }
+
+    /// The true inner product (higher is more similar). As a function call it can't use ANN indexes.
+    public func innerProduct(with other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.function("inner_product", [sqlNode, other.sqlNode]))
+    }
+    public func innerProduct(with other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.function("inner_product", [sqlNode, other.sqlNode]))
+    }
+}
+
+extension SQLExpression where Value.NonNull: PGBitType {
+    /// Hamming distance, pgvector's `<~>`: the number of differing bits. Index-friendly for `ORDER BY … LIMIT`.
+    public func hammingDistance(to other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.infix(sqlNode, "<~>", other.sqlNode))
+    }
+    public func hammingDistance(to other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.infix(sqlNode, "<~>", other.sqlNode))
+    }
+
+    /// Jaccard distance, pgvector's `<%>`. Index-friendly for `ORDER BY … LIMIT`.
+    public func jaccardDistance(to other: some SQLArgument<Value.NonNull>) -> Expr<Value.AsDouble> {
+        Expr(.infix(sqlNode, "<%>", other.sqlNode))
+    }
+    public func jaccardDistance(to other: any SQLExpression<Value.NonNull?>) -> Expr<Double?> {
+        Expr(.infix(sqlNode, "<%>", other.sqlNode))
+    }
+}
