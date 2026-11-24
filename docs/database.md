@@ -41,14 +41,28 @@ Libraries such as `swift-jobs-postgres` take the underlying pool, `db.client`, s
 rethrowing your error. Queries take the transaction as their executor:
 
 ```swift
-let todoCount = try await db.transaction { tx in
-    try await TodoModel.insert(TodoModel.Insert(userID: userID, title: "Ship it")).execute(on: tx)
-    return try await TodoModel.query().filter(TodoModel.userID == userID).all(on: tx).count
+let renamed = try await db.transaction { tx in
+    let user = try await UserModel.query().filter(UserModel.id == 1).forUpdate().first(on: tx)
+    var active = user!.active()
+    active.name = "Renamed"
+    return try await active.update(on: tx)
 }
 ```
 
 Don't let the `Transaction` escape the closure. `tx.connection` exposes the underlying `PostgresConnection`. A query
 on a transaction whose connection was lost throws `DBKitError.connectionClosed`.
+
+## Transaction-Local Postgres Settings
+
+```swift
+let users = try await db.transaction { tx in
+    try await tx.setLocal("statement_timeout", "5s")
+    return try await UserModel.query().filter(UserModel.email.like("%@example.com")).all(on: tx)
+}
+```
+
+`setLocal` uses `set_config(name, value, true)`, so the setting ends with the transaction instead of leaking to
+the next user of the pooled connection.
 
 ## Executors
 
