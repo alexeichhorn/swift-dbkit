@@ -58,6 +58,9 @@ let retried = try await JobModel.update()
 
 Without a filter, `update()` changes every row.
 
+`update()` and `delete()` also accept `whereExists(_:)` / `whereNotExists(_:)` subqueries; see [Correlated EXISTS /
+NOT EXISTS](querying.md#correlated-exists--not-exists).
+
 ## Delete
 
 ```swift

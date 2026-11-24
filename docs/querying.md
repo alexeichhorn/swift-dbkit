@@ -75,6 +75,82 @@ compile, an integer literal takes its column's integer type, and a nullable colu
 matches, since PostgreSQL compares it as NULL: the `("internal", "beta", nil)` row above matches nothing. `in` with an
 empty array matches nothing.
 
+## Correlated EXISTS / NOT EXISTS
+
+Columns of the outer model inside a subquery refer to the outer row:
+
+```swift
+@Model(table: "projects")
+class ProjectModel {
+    @Key @AutoIncrement var id: Int64
+    var state: String
+}
+
+@Model(table: "tasks")
+class TaskModel {
+    @Key @AutoIncrement var id: Int64
+    var projectID: Int64
+    var state: String
+}
+```
+
+```swift
+let activeProjects = try await ProjectModel.query()
+    .whereExists(
+        TaskModel.query()
+            .select(TaskModel.id)
+            .filter(TaskModel.projectID == ProjectModel.id && TaskModel.state == "active")
+    )
+    .orderBy(ProjectModel.id.asc)
+    .all(on: db)
+
+let withoutArchived = try await ProjectModel.query()
+    .whereNotExists(
+        TaskModel.query().select(TaskModel.id).filter(TaskModel.projectID == ProjectModel.id && TaskModel.state == "archived")
+    )
+    .all(on: db)
+
+let deleted = try await TaskModel.delete()
+    .whereExists(
+        ProjectModel.query().select(ProjectModel.id).filter(ProjectModel.id == TaskModel.projectID && ProjectModel.state == "archived")
+    )
+    .execute(on: db)
+```
+
+The subquery is a model query or a projection, and it can take its own `whereExists`. Its binds are numbered with the
+outer query's, in the order they appear.
+
+`SQL.exists(_:)` is the same test as an `Expr<Bool>`, for combining with `&&`, `||` and `!`, joining on, or selecting:
+
+```swift
+let hasActiveTask = SQL.exists(
+    TaskModel.query().select(TaskModel.id).filter(TaskModel.projectID == ProjectModel.id && TaskModel.state == "active")
+)
+let busyOrArchived = try await ProjectModel.query().filter(hasActiveTask || ProjectModel.state == "archived").all(on: db)
+let flags = try await ProjectModel.query().select(ProjectModel.id.as("id"), hasActiveTask.as("busy")).all(on: db)
+```
+
+A subquery on the outer query's own table needs another name for that table, so `Model.as(_:)` aliases it. Its
+columns refer to the aliased row, and the model's plain columns still to the outer one:
+
+```swift
+@Model(table: "employees")
+class EmployeeModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+    var managerID: Int64?
+}
+```
+
+```swift
+let reports = EmployeeModel.as("reports")
+let managers = try await EmployeeModel.query()
+    .whereExists(reports.query().select(reports.id).filter(reports.managerID == EmployeeModel.id))
+    .all(on: db)
+// SELECT "employees".* FROM "employees" WHERE EXISTS
+//   (SELECT "reports"."id" FROM "employees" AS "reports" WHERE "reports"."manager_id" = "employees"."id")
+```
+
 ## Dynamic Conditions
 
 ```swift
