@@ -74,6 +74,15 @@ public struct UpdateQuery<Row: Model>: Sendable where Row.Base == Row {
         setting(column.name, value.sqlNode)
     }
 
+    /// Sets a column to an expression, e.g. `.set(Job.attempts, to: Job.attempts + 1)`.
+    public func set<V: SQLType, E: SQLExpression>(_ column: Column<Row, V>, to expression: E) -> Self where E.Value == V {
+        setting(column.name, expression.sqlNode)
+    }
+
+    public func set<W: SQLValue, E: SQLExpression>(_ column: Column<Row, W?>, to expression: E) -> Self where E.Value == W {
+        setting(column.name, expression.sqlNode)
+    }
+
     public func filter<P: SQLExpression>(_ predicate: P) -> Self where P.Value.NonNull == Bool {
         filtered(predicate.sqlNode)
     }
