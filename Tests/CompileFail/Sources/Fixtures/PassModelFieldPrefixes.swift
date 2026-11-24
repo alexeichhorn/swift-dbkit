@@ -11,6 +11,13 @@ class AcceptedModel {
     @ColumnName("__dbkit_marker") var label: String
 }
 
+@Model(table: "sources")
+class SourceModel {
+    @Key var id: Int64
+    var targetID: Int64
+    @BelongsTo(key: "targetID") var target: AcceptedModel?
+}
+
 private func useAcceptedNames() {
     _ = AcceptedModel.query()
         .filter(AcceptedModel.dbkit_value == 1)
@@ -18,6 +25,7 @@ private func useAcceptedNames() {
         .filter(AcceptedModel.__dbkit == 3)
         .filter(AcceptedModel.__dbkitx_value == 4)
         .filter(AcceptedModel.label == "value")
-    // Waits for slice 20: a `SourceModel` with `@BelongsTo var target: AcceptedModel?`, filtered by the relation paths
-    // to `__dbkit` and `label`.
+    _ = SourceModel.query()
+        .filter(SourceModel.Relations.target.__dbkit == 3)
+        .filter(SourceModel.Relations.target.label == "value")
 }

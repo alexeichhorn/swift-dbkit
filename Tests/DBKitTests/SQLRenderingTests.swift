@@ -80,6 +80,18 @@ class LeaseModel {
         #expect(members.render().sql == #"SELECT "members".* FROM "members""#)
     }
 
+    @Test func relationPathsShareJoinsAndAliasSelfReferences() {
+        let rendered = MemberModel.query()
+            .filter(MemberModel.Relations.organization.name == "Acme")
+            .filter(MemberModel.Relations.manager.organization.name == "Acme")
+            .orderBy(MemberModel.Relations.manager.name.asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "members".* FROM "members" LEFT JOIN "organizations" ON "organizations"."id" = "members"."organization_id" LEFT JOIN "members" AS "members.manager" ON "members.manager"."id" = "members"."manager_id" LEFT JOIN "organizations" AS "members.manager.organization" ON "members.manager.organization"."id" = "members.manager"."organization_id" WHERE "organizations"."name" = $1 AND "members.manager.organization"."name" = $2 ORDER BY "members.manager"."name" ASC"#
+        )
+    }
+
     @Test func explicitJoinFilteringAndRowLocks() {
         let filtered = UserModel.query().join(\.todos).filter(TodoModel.title == "Keep me").distinct().render().sql
         #expect(

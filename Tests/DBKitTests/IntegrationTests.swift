@@ -128,8 +128,8 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             let filtered = try await UserModel.query().with(\.todos, .joined).filter(TodoModel.title == "Ship it").all(on: tx)
             #expect(filtered.map { $0.todos.map(\.title) } == [["Ship it"]])
 
-            // Waits for slice 20: this query filtered by `TodoModel.Relations.user.name == "Alex"`.
             let todos = try await TodoModel.query()
+                .filter(TodoModel.Relations.user.name == "Alex")
                 .orderBy(TodoModel.id.asc)
                 .with(\.user) { $0.with(\.todos) }
                 .all(on: tx)
