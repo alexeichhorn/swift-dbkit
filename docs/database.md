@@ -42,7 +42,7 @@ rethrowing your error. Queries take the transaction as their executor:
 
 ```swift
 let todoCount = try await db.transaction { tx in
-    try await tx.query("INSERT INTO todos (user_id, title) VALUES (\(userID), \("Ship it"))")
+    try await TodoModel.insert(TodoModel.Insert(userID: userID, title: "Ship it")).execute(on: tx)
     return try await TodoModel.query().filter(TodoModel.userID == userID).all(on: tx).count
 }
 ```

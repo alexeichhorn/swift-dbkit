@@ -60,9 +60,29 @@ Property names starting with `__dbkit_` are reserved for the code `@Model` gener
 
 Comparing a column with a value of another type doesn't compile.
 
+## Common Mutations
+
+Insert with the generated `Insert` type. Auto-increment keys are left out; columns with a Swift default
+(`var isComplete: Bool = false`) and optional columns can be omitted. Defaults are evaluated per insert:
+
+```swift
+let created = try await UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
+    .returningAll()
+    .first(on: db)
+```
+
+Delete a loaded row by primary key:
+
+```swift
+try await user.delete(on: db)
+```
+
+Use the `update()` / `delete()` builders for bulk or conditional mutations.
+
 ## More Docs
 
 - [Querying](docs/querying.md)
+- [Mutations](docs/mutations.md)
 - [Database](docs/database.md)
 
 ## License
