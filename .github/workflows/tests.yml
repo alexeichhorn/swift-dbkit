@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    container: swift:6.4
+    steps:
+      - uses: actions/checkout@v4
+      # Lints only the folders that exist, since `Tests` arrives with the first tests.
+      - run: swift format lint --strict --recursive $(ls -d Sources Tests 2>/dev/null) Package.swift
+
+  test:
+    runs-on: ubuntu-latest
+    container: swift:6.4
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: dbkit
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dbkit"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/dbkit
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build --build-tests
+      - run: swift test
