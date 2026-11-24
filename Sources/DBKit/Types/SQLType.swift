@@ -9,6 +9,7 @@ public protocol SQLType: Sendable {
     associatedtype AsBool
     associatedtype AsString
     associatedtype AsDouble
+    associatedtype AsInterval
 
     /// The value as a bind parameter, or `NULL`.
     var sqlNode: SQLNode { get }
@@ -18,7 +19,7 @@ public protocol SQLType: Sendable {
 
 /// A non-null value that can be bound as a query parameter and decoded from a result column.
 public protocol SQLValue: SQLType, SQLArgument, PostgresEncodable, PostgresDecodable
-where NonNull == Self, Value == Self, AsBool == Bool, AsString == String, AsDouble == Double {
+where NonNull == Self, Value == Self, AsBool == Bool, AsString == String, AsDouble == Double, AsInterval == Interval {
     /// PostgreSQL type name, used for `CAST` and typed placeholders.
     static var sqlTypeName: String { get }
 }
@@ -36,6 +37,7 @@ extension Optional: SQLType where Wrapped: SQLValue {
     public typealias AsBool = Bool?
     public typealias AsString = String?
     public typealias AsDouble = Double?
+    public typealias AsInterval = Interval?
 
     public var sqlNode: SQLNode { map(\.sqlNode) ?? .null }
 
@@ -86,6 +88,7 @@ extension Date: SQLTextCastable, SQLCastPartner {
     public static var sqlTypeName: String { "timestamptz" }
     public typealias CastPartner = Date
 }
+extension Interval: SQLAdditive, SQLTextCastable {}
 extension Data: SQLValue { public static var sqlTypeName: String { "bytea" } }
 
 extension Int16: SQLSizedInteger, SQLTextCastable {

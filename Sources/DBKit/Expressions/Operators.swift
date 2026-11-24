@@ -1,3 +1,5 @@
+import Foundation
+
 // Operators are declared only for `SQLExpression` operands (with a plain value on at most one side),
 // so they never take part in type-checking ordinary Swift code.
 
@@ -526,6 +528,41 @@ public func / <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<Double?
 @_disfavoredOverload
 public func / <R: SQLExpression>(lhs: Double, rhs: R) -> Expr<R.Value.AsDouble> where R.Value: SQLMixedNumeric {
     Expr(.infix(lhs.sqlNode, "/", rhs.sqlNode))
+}
+
+// MARK: - Timestamp ± interval
+//
+// The result is nullable when the timestamp or the interval is.
+
+public func + <L: SQLExpression>(lhs: L, rhs: Interval) -> Expr<L.Value> where L.Value.NonNull == Date {
+    Expr(.infix(lhs.sqlNode, "+", rhs.sqlNode))
+}
+public func + <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value.NonNull == Date, R.Value == Interval {
+    Expr(.infix(lhs.sqlNode, "+", rhs.sqlNode))
+}
+public func + <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<Date?> where L.Value.NonNull == Date, R.Value == Interval? {
+    Expr(.infix(lhs.sqlNode, "+", rhs.sqlNode))
+}
+public func + <R: SQLExpression>(lhs: Date, rhs: R) -> Expr<Date> where R.Value == Interval {
+    Expr(.infix(lhs.sqlNode, "+", rhs.sqlNode))
+}
+public func + <R: SQLExpression>(lhs: Date, rhs: R) -> Expr<Date?> where R.Value == Interval? {
+    Expr(.infix(lhs.sqlNode, "+", rhs.sqlNode))
+}
+public func - <L: SQLExpression>(lhs: L, rhs: Interval) -> Expr<L.Value> where L.Value.NonNull == Date {
+    Expr(.infix(lhs.sqlNode, "-", rhs.sqlNode))
+}
+public func - <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value.NonNull == Date, R.Value == Interval {
+    Expr(.infix(lhs.sqlNode, "-", rhs.sqlNode))
+}
+public func - <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<Date?> where L.Value.NonNull == Date, R.Value == Interval? {
+    Expr(.infix(lhs.sqlNode, "-", rhs.sqlNode))
+}
+public func - <R: SQLExpression>(lhs: Date, rhs: R) -> Expr<Date> where R.Value == Interval {
+    Expr(.infix(lhs.sqlNode, "-", rhs.sqlNode))
+}
+public func - <R: SQLExpression>(lhs: Date, rhs: R) -> Expr<Date?> where R.Value == Interval? {
+    Expr(.infix(lhs.sqlNode, "-", rhs.sqlNode))
 }
 
 // MARK: - Bitwise (integers)
