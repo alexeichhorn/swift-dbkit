@@ -15,6 +15,8 @@ private func useModelAPI(loaded: UserModel.Loaded<[TodoModel]>) {
     let _: Query<UserModel.Loaded<[TodoModel.Loaded<UserModel?>]>> = UserModel.query().with(\.todos) { $0.with(\.user) }
     let _: Query<UserModel.Loaded<[TodoModel.Loaded<UserModel?>]>> = UserModel.query().with(\.todos) { $0.with(\.user, .joined) }
     let _: [TodoModel] = loaded.todos
-    // Waits for slice 19: `load(_:on:)` on an unloaded row.
+    let _: (UserModel, Database) async throws -> UserModel.Loaded<[TodoModel]> = { unloaded, db in
+        try await unloaded.load(\.todos, on: db)
+    }
     _ = UserModel.Insert(name: "Alex", email: "a@b.com")
 }

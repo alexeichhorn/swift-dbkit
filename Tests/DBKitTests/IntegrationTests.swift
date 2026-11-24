@@ -110,7 +110,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
 @Suite struct IntegrationTests {
     @Test func eagerLoadingSelectInJoinedNestedAndExplicit() async throws {
         try await withRollback { tx in
-            let (alex, _) = try await seedTodos(on: tx)
+            let (alex, sam) = try await seedTodos(on: tx)
 
             let users = try await UserModel.query().orderBy(UserModel.id.asc).with(\.todos) { $0.with(\.tags) }.all(on: tx)
             #expect(users.map(\.name) == ["Alex", "Sam"])
@@ -136,7 +136,8 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             #expect(todos.count == 2)
             #expect(todos[0].user?.todos.count == 2)
 
-            // Waits for slice 19: `sam.load(\.todos, on:)` loads no todos.
+            let loaded = try await sam.load(\.todos, on: tx)
+            #expect(loaded.todos.isEmpty)
             let withUser = try #require(try await TodoModel.query().with(\.user).with(\.tags).first(on: tx))
             let plain: TodoModel = withUser
             #expect(plain.id == withUser.id)
@@ -317,6 +318,69 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
                 .with(\.player) { $0.with(\.team) }
                 .all(on: tx)
             #expect(entries.map { $0.player?.team?.name } == ["Red", "Blue"])
+        }
+    }
+
+    /// `load(_:on:)` runs one select-in query per relation level, for one row or many, and none for no rows. A loaded
+    /// row keeps the relations it has.
+    @Test func explicitLoadsRunOneQueryPerLevelAndKeepLoadedRelations() async throws {
+        try await withRollback { tx in
+            let (alex, sam) = try await seedTodos(on: tx)
+            let db = CountingExecutor(base: tx)
+
+            let alexWithTodos: UserModel.Loaded<[TodoModel]> = try await alex.load(\.todos, on: db)
+            #expect(alexWithTodos.todos.map(\.title) == ["Buy milk", "Ship it"])
+            #expect(await db.counter.count == 1)
+
+            let alexWithTags: UserModel.Loaded<[TodoModel.Loaded<NotLoaded, [TagModel]>]> = try await alex.load(\.todos, on: db) {
+                $0.with(\.tags)
+            }
+            #expect(alexWithTags.todos.map { $0.tags.map(\.name) } == [["home", "urgent"], []])
+            #expect(await db.counter.count == 3)
+
+            let usersWithTags = try await [alex, sam].load(\.todos, on: db) { $0.with(\.tags) }
+            #expect(usersWithTags.map { $0.todos.map(\.title) } == [["Buy milk", "Ship it"], []])
+            #expect(usersWithTags[0].todos.map { $0.tags.map(\.name) } == [["home", "urgent"], []])
+            #expect(await db.counter.count == 5)
+
+            let todos = try await TodoModel.query().orderBy(TodoModel.id.asc).all(on: tx)
+            let todosWithUser: [TodoModel.Loaded<UserModel?, NotLoaded>] = try await todos.load(\.user, on: db)
+            #expect(todosWithUser.map { $0.user?.name } == ["Alex", "Alex"])
+            #expect(await db.counter.count == 6)
+
+            let tagged: TodoModel.Loaded<UserModel?, [TagModel]> = try await todosWithUser[0].load(\.tags, on: db)
+            #expect(tagged.user?.name == "Alex")
+            #expect(tagged.tags.map(\.name) == ["home", "urgent"])
+            #expect(await db.counter.count == 7)
+
+            let none: [UserModel.Loaded<[TodoModel]>] = try await [UserModel]().load(\.todos, on: db)
+            #expect(none.isEmpty)
+            #expect(await db.counter.count == 7)
+        }
+    }
+
+    /// A to-one relation with a `nil` key loads as `nil`, without a query when no row has a key.
+    @Test func explicitLoadsLeaveMissingParentsNil() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE TEMP TABLE organizations (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL)")
+            try await tx.query(
+                "CREATE TEMP TABLE members (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, organization_id BIGINT NOT NULL, manager_id BIGINT)"
+            )
+            let acme = try #require(try await OrganizationModel.insert(OrganizationModel.Insert(name: "Acme")).returningAll().first(on: tx))
+            let alex = try #require(
+                try await MemberModel.insert(MemberModel.Insert(name: "Alex", organizationID: acme.id)).returningAll().first(on: tx))
+            let sam = try #require(
+                try await MemberModel.insert(MemberModel.Insert(name: "Sam", organizationID: acme.id, managerID: alex.id)).returningAll()
+                    .first(on: tx))
+            let db = CountingExecutor(base: tx)
+
+            let alexWithManager = try await alex.load(\.manager, on: db)
+            #expect(alexWithManager.manager == nil)
+            #expect(await db.counter.count == 0)
+
+            let withManagers = try await [alex, sam].load(\.manager, on: db)
+            #expect(withManagers.map { $0.manager?.name } == [nil, "Alex"])
+            #expect(await db.counter.count == 1)
         }
     }
 
@@ -926,4 +990,25 @@ private func backendPID(on executor: some DatabaseExecutor) async throws -> Int3
 
 private func sleepingBackendPID(on executor: some DatabaseExecutor) async throws -> Int32? {
     try await executor.query("SELECT pg_backend_pid() FROM pg_sleep(0.2)").collect().first?.decode(Int32.self)
+}
+
+/// Runs each query on `base` and counts it, to check how many queries a load runs.
+private struct CountingExecutor<Base: DatabaseExecutor>: DatabaseExecutor {
+    let base: Base
+    let counter = QueryCounter()
+
+    var logger: Logger { base.logger }
+
+    func query(_ query: PostgresQuery) async throws -> PostgresRowSequence {
+        await counter.increment()
+        return try await base.query(query)
+    }
+}
+
+private actor QueryCounter {
+    private(set) var count = 0
+
+    func increment() {
+        count += 1
+    }
 }

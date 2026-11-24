@@ -339,6 +339,19 @@ import Testing
         }
     }
 
+    @Test func lazyLoadRelation() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Ari", email: "ari@b.com")
+            _ = try await seedTodo(on: tx, userID: user.id, title: "Lazy load")
+
+            let loaded: UserModel.Loaded<[TodoModel]> = try await user.load(\.todos, on: tx)
+
+            #expect(loaded.todos.count == 1)
+            #expect(loaded.todos[0].title == "Lazy load")
+        }
+    }
+
     @Test func joinFilterOnChildTable() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -420,6 +433,21 @@ import Testing
 
             #expect(todos.count == 1)
             #expect(todos.first?.id == todo2.id)
+        }
+    }
+
+    @Test func manyToManyLazyLoad() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Lazy", email: "lazy@db.com")
+            let todo = try await seedTodo(on: tx, userID: user.id, title: "First")
+            let tag = try await seedTag(on: tx, name: "A")
+            try await seedTodoTag(on: tx, todoID: todo.id, tagID: tag.id)
+
+            let loaded: TodoModel.Loaded<NotLoaded, [TagModel]> = try await todo.load(\.tags, on: tx)
+
+            #expect(loaded.tags.count == 1)
+            #expect(loaded.tags[0].name == "A")
         }
     }
 
