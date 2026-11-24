@@ -37,6 +37,9 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - Counts, starts, lengths and indexes of text functions take any `Int32` expression, not only a literal, and values and expressions mix
 - `SQL.split` with a nullable delimiter, which splits into characters and stays non-null
 - `SQL.concat()` and `SQL.concatWithSeparator(separator)` without values render valid SQL
+- A relation path inside a subquery joins under its own alias when an enclosing query already uses the table's name, so it no longer hides the outer row it is compared with
+- A column of a model that an enclosing query reaches through a relation join binds to the nearest such join, as rust-dbkit resolves it
+- A join added by a relation path is placed before a custom `join(_:on:)` whose condition refers to it
 
 ## Left Out
 

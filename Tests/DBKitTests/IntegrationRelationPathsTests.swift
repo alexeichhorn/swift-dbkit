@@ -75,23 +75,282 @@ import Testing
         }
     }
 
-    // Waits for slice 20b: correlated_exists_returns_only_members_with_matching_records
-    // Waits for slice 20b: correlated_not_exists_returns_unmatched_members_despite_missing_record_owners
-    // Waits for slice 20b: correlated_exists_projection_is_evaluated_for_each_outer_row
-    // Waits for slice 20b: correlated_renamed_column_and_local_predicate_select_the_matching_member
-    // Waits for slice 20b: correlated_computed_comparison_uses_the_outer_text_value
-    // Waits for slice 20b: correlated_nullable_comparison_does_not_compare_the_inner_column_to_itself
-    // Waits for slice 20b: correlated_nested_relation_excludes_an_organization_without_records
-    // Waits for slice 20b: correlated_nested_exists_resolves_both_enclosing_models
-    // Waits for slice 20b: correlated_explicit_outer_alias_is_not_shadowed_by_an_automatic_alias
-    // Waits for slice 20b: correlated_sibling_paths_keep_their_local_comparison_and_outer_identity
-    // Waits for slice 20b: nested_exists_matches_the_nearer_owner_instead_of_the_outer_member
-    // Waits for slice 20b: nested_not_exists_keeps_a_missing_nearer_relation_instead_of_using_an_outer_relation
-    // Waits for slice 20b: ambiguous_middle_relations_correlate_to_the_outer_owner
-    // Waits for slice 20b: ambiguous_middle_relations_preserve_nulls_in_the_outer_binding
-    // Waits for slice 20b: correlated_exists_matches_the_outer_relation_join
-    // Waits for slice 20b: correlated_not_exists_preserves_missing_outer_relation_joins
-    // Waits for slice 20b: correlated_exists_matches_the_outer_joined_loading_relation
+    @Test func correlatedExistsReturnsOnlyMembersWithMatchingRecords() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            for inner in [PathRecordModel.query(), PathRecordModel.query().join(\.owner), PathRecordModel.query().leftJoin(\.owner)] {
+                let members = try await PathMemberModel.query()
+                    .whereExists(inner.filter(PathRecordModel.Relations.owner.id == PathMemberModel.id))
+                    .orderBy(PathMemberModel.id.asc)
+                    .all(on: tx)
+                #expect(members.map(\.id) == [1, 2, 3, 4])
+            }
+        }
+    }
+
+    @Test func correlatedNotExistsReturnsUnmatchedMembersDespiteMissingRecordOwners() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            let members = try await PathMemberModel.query()
+                .whereNotExists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == PathMemberModel.id))
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            // NULL and dangling owner ids in records 5 and 6 must not match any member.
+            #expect(members.map(\.id) == [5])
+        }
+    }
+
+    @Test func correlatedExistsProjectionIsEvaluatedForEachOuterRow() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            let hasRecords = SQL.exists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == PathMemberModel.id))
+            let rows: [(Int64, Bool)] = try await PathMemberModel.query()
+                .select(PathMemberModel.id.as("id"), hasRecords.as("has_records"))
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            #expect(rows.map { $0.0 } == [1, 2, 3, 4, 5])
+            #expect(rows.map { $0.1 } == [true, true, true, true, false])
+        }
+    }
+
+    @Test func correlatedRenamedColumnAndLocalPredicateSelectTheMatchingMember() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+            let owner = PathRecordModel.Relations.owner
+
+            let members = try await PathMemberModel.query()
+                .whereExists(PathRecordModel.query().filter(owner.code == PathMemberModel.code).filter(owner.score > 25))
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            #expect(members.map(\.id) == [1])
+        }
+    }
+
+    @Test func correlatedComputedComparisonUsesTheOuterTextValue() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            let members = try await PathMemberModel.query()
+                .whereExists(PathRecordModel.query().filter(SQL.lower(PathRecordModel.Relations.owner.label) == PathMemberModel.label))
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            // Member 5's label is member 1's in lowercase. Comparing the owner's lowercased label to its own label would
+            // find nobody.
+            #expect(members.map(\.id) == [5])
+        }
+    }
+
+    @Test func correlatedNullableComparisonDoesNotCompareTheInnerColumnToItself() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            let members = try await PathMemberModel.query()
+                .whereExists(
+                    PathRecordModel.query()
+                        .filter(PathRecordModel.id == 1)
+                        .filter(PathRecordModel.Relations.owner.note.isDistinct(from: PathMemberModel.note))
+                )
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            // Record 1's owner has a NULL note; only members 2 and 3 have notes.
+            #expect(members.map(\.id) == [2, 3])
+        }
+    }
+
+    @Test func correlatedNestedRelationExcludesAnOrganizationWithoutRecords() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            let organizations = try await PathOrganizationModel.query()
+                .whereExists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.organization.id == PathOrganizationModel.id))
+                .orderBy(PathOrganizationModel.id.asc)
+                .all(on: tx)
+            #expect(organizations.map(\.id) == [1, 2])
+        }
+    }
+
+    @Test func correlatedNestedExistsResolvesBothEnclosingModels() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+            let owner = PathRecordModel.Relations.owner
+
+            let members = try await PathMemberModel.query()
+                .whereExists(
+                    PathOrganizationModel.query()
+                        .whereExists(
+                            PathRecordModel.query()
+                                .filter(owner.id == PathMemberModel.id)
+                                .filter(owner.organizationID == PathOrganizationModel.id)
+                        )
+                )
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            // Member 4 has a record but no organization; member 5 has no record.
+            #expect(members.map(\.id) == [1, 2, 3])
+        }
+    }
+
+    @Test func correlatedExplicitOuterAliasIsNotShadowedByAnAutomaticAlias() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+
+            // Rust's second alias is its allocator's `__dbkit_r0`; the table's name is the one this port's allocator uses.
+            for alias in ["outer_member", "path_members"] {
+                let outer = PathMemberModel.as(alias)
+                let members = try await outer.query()
+                    .whereExists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == outer.id))
+                    .orderBy(outer.id.asc)
+                    .all(on: tx)
+                #expect(members.map(\.id) == [1, 2, 3, 4], "outer alias: \(alias)")
+            }
+        }
+    }
+
+    @Test func correlatedSiblingPathsKeepTheirLocalComparisonAndOuterIdentity() async throws {
+        try await withRollback { tx in
+            try await setupCorrelatedRelationPaths(on: tx)
+            let first = PathAssignmentModel.Relations.first
+
+            let members = try await PathMemberModel.query()
+                .whereExists(
+                    PathAssignmentModel.query()
+                        .filter(first.id == PathMemberModel.id)
+                        .filter(first.score > PathAssignmentModel.Relations.second.score)
+                )
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            #expect(members.map(\.id) == [1, 3])
+        }
+    }
+    @Test func nestedExistsMatchesTheNearerOwnerInsteadOfTheOuterMember() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let members = try await PathMemberModel.query()
+                .whereExists(
+                    PathRecordModel.query()
+                        .join(\.owner)
+                        .filter(PathRecordModel.id == 1)
+                        .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                )
+                .orderBy(PathMemberModel.id.asc)
+                .all(on: tx)
+            // Record 1's owner has assignments, whoever the outer member is. Resolving the innermost id to the outer
+            // member would exclude member 4.
+            #expect(members.map(\.id) == [1, 2, 3, 4])
+        }
+    }
+
+    @Test func nestedNotExistsKeepsAMissingNearerRelationInsteadOfUsingAnOuterRelation() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .join(\.owner)
+                .whereExists(
+                    PathAssignmentModel.query()
+                        .leftJoin(\.first)
+                        .filter(PathAssignmentModel.id == 4)
+                        .whereNotExists(PathOrganizationModel.query().filter(PathOrganizationModel.id == PathMemberModel.organizationID))
+                )
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // Assignment 4 has no first member, so NOT EXISTS holds for every joined record. Falling back to the record's
+            // owner would leave only record 7.
+            #expect(records.map(\.id) == [1, 2, 3, 4, 7])
+        }
+    }
+
+    @Test func ambiguousMiddleRelationsCorrelateToTheOuterOwner() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .join(\.owner)
+                .whereExists(
+                    PathAssignmentModel.query()
+                        .join(\.first)
+                        .join(\.second)
+                        .filter(PathAssignmentModel.id == 1)
+                        .whereExists(
+                            PathOrganizationModel.query()
+                                .filter(PathOrganizationModel.id == PathMemberModel.organizationID)
+                                .filter(PathOrganizationModel.label == "north")
+                        )
+                )
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // Assignment 1's members belong to different organizations. Choosing its first member would return every
+            // joined record; choosing its second would return none.
+            #expect(records.map(\.id) == [1, 3])
+        }
+    }
+
+    @Test func ambiguousMiddleRelationsPreserveNullsInTheOuterBinding() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .leftJoin(\.owner)
+                .whereExists(
+                    PathAssignmentModel.query()
+                        .leftJoin(\.first)
+                        .leftJoin(\.second)
+                        .filter(PathAssignmentModel.id == 4)
+                        .whereNotExists(PathOrganizationModel.query().filter(PathOrganizationModel.id == PathMemberModel.organizationID))
+                )
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // A missing sibling doesn't make the other one the binding. Only records without an owner or without an
+            // owner's organization pass NOT EXISTS.
+            #expect(records.map(\.id) == [5, 6, 7])
+        }
+    }
+
+    @Test func correlatedExistsMatchesTheOuterRelationJoin() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .join(\.owner)
+                .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // Owner 4 has no assignment; NULL and dangling owners can't join.
+            #expect(records.map(\.id) == [1, 2, 3, 4])
+        }
+    }
+
+    @Test func correlatedNotExistsPreservesMissingOuterRelationJoins() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .leftJoin(\.owner)
+                .whereNotExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // A NULL owner, a dangling owner and an owner without assignments all remain.
+            #expect(records.map(\.id) == [5, 6, 7])
+        }
+    }
+
+    @Test func correlatedExistsMatchesTheOuterJoinedLoadingRelation() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .with(\.owner, .joined)
+                .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            #expect(records.map(\.id) == [1, 2, 3, 4])
+            #expect(records.map { $0.owner?.id } == [1, 2, 1, 3])
+        }
+    }
 
     @Test func filteringIsIndependentOfLoadingStrategy() async throws {
         try await withRollback { tx in
@@ -190,7 +449,19 @@ import Testing
         }
     }
 
-    // Waits for slice 20b: automatic_left_join_for_update_returns_all_base_rows
+    @Test func automaticLeftJoinForUpdateReturnsAllBaseRows() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            // No owner filter: PostgreSQL must keep the outer join and its rows without an owner.
+            let rows = try await PathRecordModel.query()
+                .orderBy(PathRecordModel.Relations.owner.id.asc)
+                .orderBy(PathRecordModel.id.asc)
+                .forUpdate()
+                .all(on: tx)
+            #expect(rows.map(\.id) == [1, 3, 2, 4, 7, 5, 6])
+        }
+    }
 
     @Test func countExistsOneAndPaginateUseTheSameRelationFilter() async throws {
         try await withRollback { tx in
@@ -349,7 +620,23 @@ import Testing
         }
     }
 
-    // Waits for slice 20b: aliased_self_relation_filters_by_each_base_rows_parent
+    @Test func aliasedSelfRelationFiltersByEachBaseRowsParent() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let base = PathNodeModel.as("n")
+            var results: [String: [Int64]] = [:]
+            for label in ["branch", "cycle"] {
+                let rows = try await base.query()
+                    .filter(PathNodeModel.Relations.parent.label == label)
+                    .orderBy(base.id.asc)
+                    .all(on: tx)
+                results[label] = rows.map(\.id)
+            }
+            // A parent joined to itself would lose the leaf and make the cycle match every base row.
+            #expect(results == ["branch": [3], "cycle": [5]])
+        }
+    }
 
     @Test func explicitInnerJoinsAndExistingTableColumnFiltersStillWork() async throws {
         try await withRollback { tx in
@@ -377,18 +664,129 @@ import Testing
             #expect(legacy.map(\.id) == [1, 3, 4])
             #expect(mixed.map(\.id) == [1, 3])
 
-            // Waits for slice 20b: the records left-joined to members with
-            // `PathMemberModel.id == PathRecordModel.ownerID && PathMemberModel.score > 25`, filtered by
-            // `PathMemberModel.note.isNull` and `PathRecordModel.Relations.owner.code == "c"`, are `[4]`.
+            let custom = try await PathRecordModel.query()
+                .leftJoin(PathMemberModel.self, on: PathMemberModel.id == PathRecordModel.ownerID && PathMemberModel.score > 25)
+                .filter(PathMemberModel.note.isNull)
+                .filter(PathRecordModel.Relations.owner.code == "c")
+                .all(on: tx)
+            #expect(custom.map(\.id) == [4])
         }
     }
 
-    // Waits for slice 20b: custom_join_can_use_a_relation_discovered_in_a_filter_in_either_builder_order
-    // Waits for slice 20b: custom_join_exists_can_correlate_to_an_automatically_joined_owner
-    // Waits for slice 20b: custom_left_join_not_exists_preserves_missing_owner_rows
-    // Waits for slice 20b: custom_left_join_can_use_a_projection_relation_and_preserve_missing_targets
-    // Waits for slice 20b: custom_left_join_with_a_dynamic_relation_column_preserves_matches_and_missing_owners
-    // Waits for slice 20b: custom_inner_join_with_a_dynamic_relation_key_uses_the_requested_source_column
+    @Test func customJoinCanUseARelationDiscoveredInAFilterInEitherBuilderOrder() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let on = PathOrganizationModel.id == PathMemberModel.organizationID && PathOrganizationModel.label == "north"
+            let enabled = PathRecordModel.Relations.owner.enabled == true
+            for query in [
+                PathRecordModel.query().join(PathOrganizationModel.self, on: on).filter(enabled),
+                PathRecordModel.query().filter(enabled).join(PathOrganizationModel.self, on: on),
+            ] {
+                let records = try await query.orderBy(PathRecordModel.id.asc).all(on: tx)
+                // Both the custom organization condition and the owner filter apply.
+                #expect(records.map(\.id) == [1, 3])
+            }
+        }
+    }
+
+    @Test func customJoinExistsCanCorrelateToAnAutomaticallyJoinedOwner() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .join(
+                    PathOrganizationModel.self,
+                    on: PathOrganizationModel.id == 1
+                        && SQL.exists(
+                            PathAssignmentModel.query()
+                                .filter(PathAssignmentModel.firstID == PathMemberModel.id)
+                                .filter(PathAssignmentModel.secondCode == "b")
+                        )
+                )
+                .filter(PathRecordModel.Relations.owner.enabled == true)
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // Owners 1 and 3 are enabled and have matching assignments. Joining one organization row also checks that
+            // EXISTS doesn't duplicate records.
+            #expect(records.map(\.id) == [1, 3, 4])
+        }
+    }
+
+    @Test func customLeftJoinNotExistsPreservesMissingOwnerRows() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let rows = try await PathRecordModel.query()
+                .leftJoin(
+                    PathOrganizationModel.self,
+                    on: PathOrganizationModel.id == 1
+                        && !SQL.exists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                )
+                .select(
+                    PathRecordModel.id.as("id"),
+                    PathRecordModel.Relations.owner.id.as("owner_id"),
+                    PathOrganizationModel.id.as("organization_id")
+                )
+                .orderBy(PathRecordModel.id.asc)
+                .all(as: OwnerOrganization.self, on: tx)
+            // The custom join matches when the owner is missing or has no assignments. Owners with assignments remain,
+            // with no organization.
+            #expect(rows.map(\.id) == [1, 2, 3, 4, 5, 6, 7])
+            #expect(rows.map(\.ownerID) == [1, 2, 1, 3, nil, nil, 4])
+            #expect(rows.map(\.organizationID) == [nil, nil, nil, nil, 1, 1, 1])
+        }
+    }
+
+    @Test func customLeftJoinCanUseAProjectionRelationAndPreserveMissingTargets() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let rows = try await PathRecordModel.query()
+                .leftJoin(PathOrganizationModel.self, on: PathOrganizationModel.id == PathMemberModel.organizationID)
+                .select(
+                    PathRecordModel.id.as("id"),
+                    PathRecordModel.Relations.owner.label.as("owner_label"),
+                    PathOrganizationModel.label.as("organization_label")
+                )
+                .orderBy(PathRecordModel.id.asc)
+                .all(as: OwnerOrganizationLabels.self, on: tx)
+            // Missing owners and an owner with a dangling organization survive both left joins.
+            #expect(rows.map(\.id) == [1, 2, 3, 4, 5, 6, 7])
+            #expect(rows.map(\.ownerLabel) == ["Atlas", "Birch", "Atlas", "Cedar", nil, nil, "Delta"])
+            #expect(rows.map(\.organizationLabel) == ["north", "south", "north", "south", nil, nil, nil])
+        }
+    }
+
+    // Rust's two "dynamic" tests build the path column from a column and relation descriptors; Swift spells it only
+    // through `Relations`.
+
+    @Test func customLeftJoinWithADynamicRelationColumnPreservesMatchesAndMissingOwners() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .leftJoin(PathMemberModel.self, on: PathRecordModel.Relations.owner.enabled == true)
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // An enabled owner matches all four members of the custom join. Disabled, NULL and dangling owners remain
+            // once because it is a left join.
+            #expect(records.map(\.id) == [1, 1, 1, 1, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 7])
+        }
+    }
+
+    @Test func customInnerJoinWithADynamicRelationKeyUsesTheRequestedSourceColumn() async throws {
+        try await withRollback { tx in
+            try await setupRelationPaths(on: tx)
+
+            let records = try await PathRecordModel.query()
+                .join(PathMemberModel.self, on: PathRecordModel.Relations.owner.id == PathRecordModel.id)
+                .orderBy(PathRecordModel.id.asc)
+                .all(on: tx)
+            // Only records 1 and 2 have owner.id == record.id; each matches all four members.
+            #expect(records.map(\.id) == [1, 1, 1, 1, 2, 2, 2, 2])
+        }
+    }
 
     @Test func groupedProjectionsAndCorrelatedExistsResolvePathsInTheirQuery() async throws {
         try await withRollback { tx in
@@ -404,9 +802,15 @@ import Testing
             #expect(counts.map { $0.0 } == [false, true, nil])
             #expect(counts.map { $0.1 } == [2, 3, 2])
 
-            // Waits for slice 20b: the organizations with a record whose owner belongs to them and scores over 25,
-            // `PathOrganizationModel.query().whereExists(PathRecordModel.query().select(PathRecordModel.id)
-            // .filter(owner.organizationID == PathOrganizationModel.id).filter(owner.score > 25))`, are `[1]`.
+            let organizations = try await PathOrganizationModel.query()
+                .whereExists(
+                    PathRecordModel.query()
+                        .select(PathRecordModel.id)
+                        .filter(owner.organizationID == PathOrganizationModel.id)
+                        .filter(owner.score > 25)
+                )
+                .all(on: tx)
+            #expect(organizations.map(\.id) == [1])
         }
     }
 
@@ -424,4 +828,18 @@ import Testing
             // row to a type with fewer loaded relations" in docs/rust-parity.md.
         }
     }
+}
+
+/// A projection row whose plain organization column may be NULL from a left join, which a tuple typed by the model's
+/// required column can't decode.
+private struct OwnerOrganization: Decodable {
+    let id: Int64
+    let ownerID: Int64?
+    let organizationID: Int64?
+}
+
+private struct OwnerOrganizationLabels: Decodable {
+    let id: Int64
+    let ownerLabel: String?
+    let organizationLabel: String?
 }

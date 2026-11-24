@@ -109,7 +109,14 @@ import Testing
         #expect(rendered.binds.isEmpty)
     }
 
-    // Waits for slice 20b: automatic_left_join_for_update_scopes_lock_to_base_table
+    @Test func automaticLeftJoinForUpdateScopesLockToBaseTable() {
+        // Ordering preserves the outer join; a filter could let PostgreSQL simplify it to an inner join.
+        let rendered = PathRecordModel.query().orderBy(PathRecordModel.Relations.owner.id.asc).forUpdate().render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" ORDER BY "path_members"."id" ASC FOR UPDATE OF "path_records""#
+        )
+    }
 
     @Test func projectionOnlyPathsAddJoinsAndKeepOutputAliases() {
         let owner = PathRecordModel.Relations.owner
@@ -156,16 +163,158 @@ import Testing
         )
     }
 
-    // Waits for slice 20b: custom_table_join_keeps_its_columns_when_a_relation_path_uses_the_same_table
-    // Waits for slice 20b: filter_relation_join_precedes_a_custom_join_that_uses_its_alias
-    // Waits for slice 20b: projection_relation_join_precedes_a_custom_left_join_that_uses_its_alias
-    // Waits for slice 20b: relation_join_precedes_a_correlated_exists_in_a_custom_join_condition
-    // Waits for slice 20b: relation_join_precedes_a_correlation_through_nested_join_subqueries
-    // Waits for slice 20b: uncorrelated_join_subquery_keeps_its_relation_paths_local
-    // Waits for slice 20b: nested_join_dependencies_move_together_without_reordering_custom_joins
-    // Waits for slice 20b: dynamic_relation_column_keeps_custom_join_predicates_and_binds
-    // Waits for slice 20b: dynamic_relation_key_compared_to_a_literal_is_a_custom_join
-    // Waits for slice 20b: dynamic_relation_key_compared_to_another_source_column_keeps_that_column
+    @Test func customTableJoinKeepsItsColumnsWhenARelationPathUsesTheSameTable() {
+        // A custom ON condition is not interchangeable with the declared relation.
+        let rendered = PathRecordModel.query()
+            .leftJoin(PathMemberModel.self, on: PathMemberModel.id == PathRecordModel.ownerID && PathMemberModel.score > 25)
+            .filter(PathMemberModel.note.isNull)
+            .filter(PathRecordModel.Relations.owner.code == "c")
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON ("path_members"."id" = "path_records"."owner_id" AND "path_members"."score" > $1) LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_members"."note" IS NULL AND "path_records.owner"."external_ref" = $2"#
+        )
+        #expect(rendered.binds.map(\.description) == ["25", "c"])
+    }
+
+    @Test func filterRelationJoinPrecedesACustomJoinThatUsesItsAlias() {
+        let on = PathOrganizationModel.id == PathMemberModel.organizationID && PathOrganizationModel.label == "north"
+        let enabled = PathRecordModel.Relations.owner.enabled == true
+        for query in [
+            PathRecordModel.query().join(PathOrganizationModel.self, on: on).filter(enabled),
+            PathRecordModel.query().filter(enabled).join(PathOrganizationModel.self, on: on),
+        ] {
+            let rendered = query.render()
+            // `PathMemberModel.organizationID` in ON is the owner join, which must already be in scope.
+            #expect(
+                rendered.sql
+                    == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" JOIN "path_organizations" ON ("path_organizations"."id" = "path_members"."organization_id" AND "path_organizations"."label" = $1) WHERE "path_members"."enabled" = $2"#
+            )
+            #expect(rendered.binds.map(\.description) == ["north", "true"])
+        }
+    }
+
+    @Test func projectionRelationJoinPrecedesACustomLeftJoinThatUsesItsAlias() {
+        let query: Projection<Int64, String?, String> = PathRecordModel.query()
+            .leftJoin(PathOrganizationModel.self, on: PathOrganizationModel.id == PathMemberModel.organizationID)
+            .select(PathRecordModel.id, PathRecordModel.Relations.owner.label, PathOrganizationModel.label)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records"."id", "path_members"."label", "path_organizations"."label" FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" LEFT JOIN "path_organizations" ON "path_organizations"."id" = "path_members"."organization_id""#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func relationJoinPrecedesACorrelatedExistsInACustomJoinCondition() {
+        let on =
+            PathOrganizationModel.id == 1
+            && SQL.exists(
+                PathAssignmentModel.query()
+                    .filter(PathAssignmentModel.firstID == PathMemberModel.id)
+                    .filter(PathAssignmentModel.secondCode == "b")
+            )
+        let enabled = PathRecordModel.Relations.owner.enabled == true
+        for query in [
+            PathRecordModel.query().join(PathOrganizationModel.self, on: on).filter(enabled),
+            PathRecordModel.query().filter(enabled).join(PathOrganizationModel.self, on: on),
+        ] {
+            let rendered = query.render()
+            #expect(
+                rendered.sql
+                    == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" JOIN "path_organizations" ON ("path_organizations"."id" = $1 AND EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE "path_assignments"."first_id" = "path_members"."id" AND "path_assignments"."second_code" = $2)) WHERE "path_members"."enabled" = $3"#
+            )
+            #expect(rendered.binds.map(\.description) == ["1", "b", "true"])
+        }
+    }
+
+    @Test func relationJoinPrecedesACorrelationThroughNestedJoinSubqueries() {
+        let rendered = PathRecordModel.query()
+            .leftJoin(
+                PathOrganizationModel.self,
+                on: SQL.exists(
+                    PathAssignmentModel.query().whereExists(PathNodeModel.query().filter(PathNodeModel.id == PathMemberModel.id))
+                )
+            )
+            .select(PathRecordModel.id, PathRecordModel.Relations.owner.score)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records"."id", "path_members"."score" FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" LEFT JOIN "path_organizations" ON EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE EXISTS (SELECT "path_nodes".* FROM "path_nodes" WHERE "path_nodes"."id" = "path_members"."id"))"#
+        )
+    }
+
+    @Test func uncorrelatedJoinSubqueryKeepsItsRelationPathsLocal() {
+        let rendered = PathRecordModel.query()
+            .join(
+                PathOrganizationModel.self,
+                on: SQL.exists(PathMemberModel.query().filter(PathMemberModel.Relations.organization.label == "north"))
+            )
+            .select(PathRecordModel.id, PathRecordModel.Relations.owner.score)
+            .render()
+        // The member belongs to the subquery here, so its organization path stays there, under a name the enclosing
+        // query doesn't use. Nothing in ON needs the owner join, so the custom join keeps its place.
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records"."id", "path_members"."score" FROM "path_records" JOIN "path_organizations" ON EXISTS (SELECT "path_members".* FROM "path_members" LEFT JOIN "path_organizations" AS "path_members.organization" ON "path_members.organization"."id" = "path_members"."organization_id" WHERE "path_members.organization"."label" = $1) LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id""#
+        )
+        #expect(rendered.binds.map(\.description) == ["north"])
+    }
+
+    @Test func nestedJoinDependenciesMoveTogetherWithoutReorderingCustomJoins() {
+        let rendered = PathRecordModel.query()
+            .join(PathNodeModel.self, on: PathNodeModel.id == PathRecordModel.id)
+            .join(PathAssignmentModel.self, on: PathAssignmentModel.firstID == PathOrganizationModel.id)
+            .filter(PathRecordModel.Relations.owner.organization.label == "north")
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" JOIN "path_nodes" ON "path_nodes"."id" = "path_records"."id" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" LEFT JOIN "path_organizations" ON "path_organizations"."id" = "path_members"."organization_id" JOIN "path_assignments" ON "path_assignments"."first_id" = "path_organizations"."id" WHERE "path_organizations"."label" = $1"#
+        )
+    }
+
+    // Rust's three "dynamic" tests build the path column a second way, from a column and relation descriptors, and
+    // compare it with `Record::owner.<column>`. A Swift path column has only the `Relations` spelling, so these check
+    // that spelling inside a custom join's condition.
+
+    @Test func dynamicRelationColumnKeepsCustomJoinPredicatesAndBinds() {
+        let enabled = PathRecordModel.Relations.owner.enabled == true
+        let inner = PathRecordModel.query().join(PathMemberModel.self, on: enabled).render()
+        #expect(
+            inner.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" JOIN "path_members" ON "path_records.owner"."enabled" = $1"#
+        )
+        #expect(inner.binds.map(\.description) == ["true"])
+
+        let outer = PathRecordModel.query().leftJoin(PathMemberModel.self, on: enabled).render()
+        #expect(
+            outer.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" LEFT JOIN "path_members" ON "path_records.owner"."enabled" = $1"#
+        )
+        #expect(outer.binds.map(\.description) == ["true"])
+    }
+
+    @Test func dynamicRelationKeyComparedToALiteralIsACustomJoin() {
+        // Even the relation's target key is not a foreign-key join when the other side is a value.
+        let rendered = PathRecordModel.query().join(PathMemberModel.self, on: PathRecordModel.Relations.owner.id == 1).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" JOIN "path_members" ON "path_records.owner"."id" = $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["1"])
+    }
+
+    @Test func dynamicRelationKeyComparedToAnotherSourceColumnKeepsThatColumn() {
+        // The caller chose the record's id, not its owner_id foreign key.
+        let rendered = PathRecordModel.query()
+            .join(PathMemberModel.self, on: PathRecordModel.Relations.owner.id == PathRecordModel.id)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" JOIN "path_members" ON "path_records.owner"."id" = "path_records"."id""#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
 
     @Test func nestedPathsShareTheirPrefixAndJoinInDependencyOrder() {
         let owner = PathRecordModel.Relations.owner
@@ -220,26 +369,346 @@ import Testing
         #expect(rendered.binds.map(\.description) == ["leaf", "branch", "root"])
     }
 
-    // Waits for slice 20b: aliased_self_relation_join_keeps_the_source_key_on_the_base_row
-    // Waits for slice 20b: subquery_paths_stay_in_the_subquery_and_preserve_correlated_base_columns
-    // Waits for slice 20b: correlated_exists_preserves_outer_columns_with_automatic_and_declared_relation_joins
-    // Waits for slice 20b: correlated_exists_uses_the_outer_relation_join_alias
-    // Waits for slice 20b: local_table_bindings_shadow_outer_relation_join_aliases
-    // Waits for slice 20b: correlated_outer_join_alias_stays_distinct_from_an_inner_relation_path
-    // Waits for slice 20b: nested_subquery_uses_the_nearer_relation_instead_of_the_outer_base_table
-    // Waits for slice 20b: nested_subquery_uses_the_nearer_relation_instead_of_an_outer_relation
-    // Waits for slice 20b: ambiguous_middle_relations_preserve_the_outer_relation_binding
-    // Waits for slice 20b: ambiguous_nested_relation_targets_preserve_the_outer_nested_binding
-    // Waits for slice 20b: correlated_nested_exists_uses_the_enclosing_relation_join_alias
-    // Waits for slice 20b: correlated_not_exists_keeps_outer_filters_and_bind_order
-    // Waits for slice 20b: correlated_renamed_computed_and_nullable_columns_keep_the_outer_qualifier
-    // Waits for slice 20b: correlated_nested_relation_keeps_the_outer_target_table
-    // Waits for slice 20b: correlated_columns_can_reference_both_enclosing_query_levels
-    // Waits for slice 20b: correlated_exists_projection_preserves_outer_column_identity
-    // Waits for slice 20b: correlated_outer_alias_cannot_be_shadowed_by_an_automatic_join_alias
-    // Waits for slice 20b: correlated_reused_exists_expression_is_resolved_in_each_enclosing_scope
-    // Waits for slice 20b: correlated_sibling_paths_keep_local_comparisons_distinct_from_outer_columns
-    // Waits for slice 20b: correlated_subqueries_in_mutations_keep_the_outer_target_column
+    @Test func aliasedSelfRelationJoinKeepsTheSourceKeyOnTheBaseRow() {
+        let rendered = PathNodeModel.as("n").query().filter(PathNodeModel.Relations.parent.label == "branch").render()
+        // The parent joins to the aliased base row, not to itself.
+        #expect(
+            rendered.sql
+                == #"SELECT "n".* FROM "path_nodes" AS "n" LEFT JOIN "path_nodes" ON "path_nodes"."id" = "n"."parent_id" WHERE "path_nodes"."label" = $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["branch"])
+    }
+
+    // A path's join in a subquery never takes a name an enclosing query uses, so it can't hide the enclosing row: when
+    // the table's name is used outside, the join is named as for a taken name (`"path_records.owner"`). A model's plain
+    // column refers to the query's own table or custom join of that model, else to the nearest enclosing query that has
+    // the model as its table, a custom join or its only relation join of it, else to the query's relation join of it.
+
+    @Test func subqueryPathsStayInTheSubqueryAndPreserveCorrelatedBaseColumns() {
+        let owner = PathRecordModel.Relations.owner
+        let rendered = PathOrganizationModel.query()
+            .filter(PathOrganizationModel.label == "north")
+            .whereExists(
+                PathRecordModel.query()
+                    .select(PathRecordModel.id)
+                    .filter(owner.organizationID == PathOrganizationModel.id)
+                    .filter(owner.enabled == true)
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_organizations".* FROM "path_organizations" WHERE "path_organizations"."label" = $1 AND EXISTS (SELECT "path_records"."id" FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE "path_members"."organization_id" = "path_organizations"."id" AND "path_members"."enabled" = $2)"#
+        )
+        #expect(rendered.binds.map(\.description) == ["north", "true"])
+    }
+
+    @Test func correlatedExistsPreservesOuterColumnsWithAutomaticAndDeclaredRelationJoins() {
+        for (inner, join) in [
+            (PathRecordModel.query(), "LEFT JOIN"),
+            (PathRecordModel.query().join(\.owner), "JOIN"),
+            (PathRecordModel.query().leftJoin(\.owner), "LEFT JOIN"),
+        ] {
+            let rendered = PathMemberModel.query()
+                .whereExists(inner.filter(PathRecordModel.Relations.owner.id == PathMemberModel.id))
+                .render()
+            #expect(
+                rendered.sql
+                    == #"SELECT "path_members".* FROM "path_members" WHERE EXISTS (SELECT "path_records".* FROM "path_records" "#
+                    + join
+                    + #" "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id")"#
+            )
+            #expect(rendered.binds.isEmpty)
+        }
+    }
+
+    @Test func correlatedExistsUsesTheOuterRelationJoinAlias() {
+        for (outer, join) in [
+            (PathRecordModel.query().join(\.owner), "JOIN"),
+            (PathRecordModel.query().leftJoin(\.owner), "LEFT JOIN"),
+        ] {
+            let rendered =
+                outer
+                .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                .render()
+            #expect(
+                rendered.sql
+                    == #"SELECT "path_records".* FROM "path_records" "# + join
+                    + #" "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE "path_assignments"."first_id" = "path_members"."id")"#
+            )
+        }
+    }
+
+    @Test func localTableBindingsShadowOuterRelationJoinAliases() {
+        let ownTable = PathRecordModel.query()
+            .join(\.owner)
+            .whereExists(PathMemberModel.query().filter(PathMemberModel.label == "Atlas"))
+            .render()
+        #expect(
+            ownTable.sql
+                == #"SELECT "path_records".* FROM "path_records" JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_members".* FROM "path_members" WHERE "path_members"."label" = $1)"#
+        )
+
+        let customJoin = PathRecordModel.query()
+            .join(\.owner)
+            .whereExists(
+                PathOrganizationModel.query()
+                    .join(PathMemberModel.self, on: PathMemberModel.organizationID == PathOrganizationModel.id)
+                    .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+                    .filter(PathMemberModel.label == "Atlas")
+            )
+            .render()
+        #expect(
+            customJoin.sql
+                == #"SELECT "path_records".* FROM "path_records" JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_organizations".* FROM "path_organizations" JOIN "path_members" ON "path_members"."organization_id" = "path_organizations"."id" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE "path_assignments"."first_id" = "path_members"."id") AND "path_members"."label" = $1)"#
+        )
+    }
+
+    @Test func correlatedOuterJoinAliasStaysDistinctFromAnInnerRelationPath() {
+        let rendered = PathRecordModel.query()
+            .join(\.owner)
+            .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.Relations.first.id == PathMemberModel.id))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" LEFT JOIN "path_members" AS "path_assignments.first" ON "path_assignments.first"."id" = "path_assignments"."first_id" WHERE "path_assignments.first"."id" = "path_members"."id")"#
+        )
+    }
+
+    @Test func nestedSubqueryUsesTheNearerRelationInsteadOfTheOuterBaseTable() {
+        let owner = PathRecordModel.Relations.owner
+        let innermost = PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id)
+        for (middle, join, filter) in [
+            (PathRecordModel.query().join(\.owner), "JOIN", ""),
+            (PathRecordModel.query().leftJoin(\.owner), "LEFT JOIN", ""),
+            (PathRecordModel.query().filter(owner.enabled == true), "LEFT JOIN", #""path_records.owner"."enabled" = $1 AND "#),
+        ] {
+            let rendered = PathMemberModel.query()
+                .whereExists(middle.filter(owner.id == PathMemberModel.id).whereExists(innermost))
+                .render()
+            // The middle query correlates to the outer member; its child sees the middle query's owner as the nearest
+            // member.
+            #expect(
+                rendered.sql
+                    == #"SELECT "path_members".* FROM "path_members" WHERE EXISTS (SELECT "path_records".* FROM "path_records" "#
+                    + join
+                    + #" "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "#
+                    + filter
+                    + #""path_records.owner"."id" = "path_members"."id" AND EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE "path_assignments"."first_id" = "path_records.owner"."id"))"#
+            )
+        }
+    }
+
+    @Test func nestedSubqueryUsesTheNearerRelationInsteadOfAnOuterRelation() {
+        let rendered = PathRecordModel.query()
+            .join(\.owner)
+            .whereExists(
+                PathAssignmentModel.query()
+                    .leftJoin(\.first)
+                    .whereNotExists(PathOrganizationModel.query().filter(PathOrganizationModel.id == PathMemberModel.organizationID))
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" LEFT JOIN "path_members" AS "path_assignments.first" ON "path_assignments.first"."id" = "path_assignments"."first_id" WHERE NOT EXISTS (SELECT "path_organizations".* FROM "path_organizations" WHERE "path_organizations"."id" = "path_assignments.first"."organization_id"))"#
+        )
+    }
+
+    @Test func ambiguousMiddleRelationsPreserveTheOuterRelationBinding() {
+        let first = #"JOIN "path_members" AS "path_assignments.first" ON "path_assignments.first"."id" = "path_assignments"."first_id""#
+        let second =
+            #"JOIN "path_members" AS "path_assignments.second" ON "path_assignments.second"."external_ref" = "path_assignments"."second_code""#
+        let innermost = PathOrganizationModel.query().filter(PathOrganizationModel.id == PathMemberModel.organizationID)
+        let innermostSQL =
+            #"EXISTS (SELECT "path_organizations".* FROM "path_organizations" WHERE "path_organizations"."id" = "path_members"."organization_id")"#
+        for (middle, middleSQL) in [
+            (PathAssignmentModel.query().join(\.first).join(\.second), "\(first) \(second) WHERE \(innermostSQL)"),
+            (PathAssignmentModel.query().join(\.second).join(\.first), "\(second) \(first) WHERE \(innermostSQL)"),
+            (
+                PathAssignmentModel.query()
+                    .filter(PathAssignmentModel.Relations.first.score > PathAssignmentModel.Relations.second.score),
+                #"LEFT \#(first) LEFT \#(second) WHERE "path_assignments.first"."score" > "path_assignments.second"."score" AND \#(innermostSQL)"#
+            ),
+        ] {
+            let rendered = PathRecordModel.query().join(\.owner).whereExists(middle.whereExists(innermost)).render()
+            // Neither sibling is the one member of the middle query, so the outer owner stays the binding, whatever
+            // the siblings' order and however they were joined.
+            #expect(
+                rendered.sql
+                    == #"SELECT "path_records".* FROM "path_records" JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" "#
+                    + middleSQL + ")"
+            )
+        }
+    }
+
+    @Test func ambiguousNestedRelationTargetsPreserveTheOuterNestedBinding() {
+        let first = PathAssignmentModel.Relations.first
+        let second = PathAssignmentModel.Relations.second
+        let rendered = PathRecordModel.query()
+            .filter(PathRecordModel.Relations.owner.organization.label == "north")
+            .whereExists(
+                PathAssignmentModel.query()
+                    .filter(first.organization.id == second.organization.id)
+                    .whereExists(PathNodeModel.query().filter(PathNodeModel.id == PathOrganizationModel.id))
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" LEFT JOIN "path_organizations" ON "path_organizations"."id" = "path_members"."organization_id" WHERE "path_organizations"."label" = $1 AND EXISTS (SELECT "path_assignments".* FROM "path_assignments" LEFT JOIN "path_members" AS "path_assignments.first" ON "path_assignments.first"."id" = "path_assignments"."first_id" LEFT JOIN "path_organizations" AS "path_assignments.first.organization" ON "path_assignments.first.organization"."id" = "path_assignments.first"."organization_id" LEFT JOIN "path_members" AS "path_assignments.second" ON "path_assignments.second"."external_ref" = "path_assignments"."second_code" LEFT JOIN "path_organizations" AS "path_assignments.second.organization" ON "path_assignments.second.organization"."id" = "path_assignments.second"."organization_id" WHERE "path_assignments.first.organization"."id" = "path_assignments.second.organization"."id" AND EXISTS (SELECT "path_nodes".* FROM "path_nodes" WHERE "path_nodes"."id" = "path_organizations"."id"))"#
+        )
+        #expect(rendered.binds.map(\.description) == ["north"])
+    }
+
+    @Test func correlatedNestedExistsUsesTheEnclosingRelationJoinAlias() {
+        let rendered = PathRecordModel.query()
+            .join(\.owner)
+            .whereExists(
+                PathOrganizationModel.query()
+                    .whereExists(
+                        PathAssignmentModel.query()
+                            .filter(PathAssignmentModel.firstID == PathMemberModel.id)
+                            .filter(PathMemberModel.organizationID == PathOrganizationModel.id)
+                    )
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_records".* FROM "path_records" JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_organizations".* FROM "path_organizations" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE "path_assignments"."first_id" = "path_members"."id" AND "path_members"."organization_id" = "path_organizations"."id"))"#
+        )
+    }
+
+    @Test func correlatedNotExistsKeepsOuterFiltersAndBindOrder() {
+        let owner = PathRecordModel.Relations.owner
+        let rendered = PathMemberModel.query()
+            .filter(PathMemberModel.label == "Atlas")
+            .whereNotExists(PathRecordModel.query().filter(owner.id == PathMemberModel.id).filter(owner.score > 25))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_members".* FROM "path_members" WHERE "path_members"."label" = $1 AND NOT EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id" AND "path_records.owner"."score" > $2)"#
+        )
+        #expect(typedBinds(rendered) == ["String(Atlas)", "Int32(25)"])
+    }
+
+    @Test func correlatedRenamedComputedAndNullableColumnsKeepTheOuterQualifier() {
+        let owner = PathRecordModel.Relations.owner
+        let rendered = PathMemberModel.query()
+            .whereExists(
+                PathRecordModel.query()
+                    .filter(owner.code == PathMemberModel.code)
+                    .filter(SQL.lower(owner.label) == PathMemberModel.label)
+                    .filter(PathMemberModel.score > owner.score)
+                    .filter(owner.note.isDistinct(from: PathMemberModel.note))
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_members".* FROM "path_members" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."external_ref" = "path_members"."external_ref" AND LOWER("path_records.owner"."label") = "path_members"."label" AND "path_members"."score" > "path_records.owner"."score" AND "path_records.owner"."note" IS DISTINCT FROM "path_members"."note")"#
+        )
+    }
+
+    @Test func correlatedNestedRelationKeepsTheOuterTargetTable() {
+        let rendered = PathOrganizationModel.query()
+            .whereExists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.organization.id == PathOrganizationModel.id))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_organizations".* FROM "path_organizations" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" LEFT JOIN "path_organizations" AS "path_records.owner.organization" ON "path_records.owner.organization"."id" = "path_members"."organization_id" WHERE "path_records.owner.organization"."id" = "path_organizations"."id")"#
+        )
+    }
+
+    @Test func correlatedColumnsCanReferenceBothEnclosingQueryLevels() {
+        let owner = PathRecordModel.Relations.owner
+        let rendered = PathMemberModel.query()
+            .whereExists(
+                PathOrganizationModel.query()
+                    .whereExists(
+                        PathRecordModel.query()
+                            .filter(owner.id == PathMemberModel.id)
+                            .filter(owner.organizationID == PathOrganizationModel.id)
+                    )
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_members".* FROM "path_members" WHERE EXISTS (SELECT "path_organizations".* FROM "path_organizations" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id" AND "path_records.owner"."organization_id" = "path_organizations"."id"))"#
+        )
+    }
+
+    @Test func correlatedExistsProjectionPreservesOuterColumnIdentity() {
+        let hasRecords = SQL.exists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == PathMemberModel.id))
+        // A projection names all of its expressions or none, so the member's id is named too.
+        let query: Projection<Int64, Bool> = PathMemberModel.query()
+            .select(PathMemberModel.id.as("id"), hasRecords.as("has_records"))
+        #expect(
+            query.render().sql
+                == #"SELECT "path_members"."id" AS "id", EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id") AS "has_records" FROM "path_members""#
+        )
+    }
+
+    @Test func correlatedOuterAliasCannotBeShadowedByAnAutomaticJoinAlias() {
+        // Rust also tries `__dbkit_r0`, the name its allocator gives an automatic join. The table's own name is the
+        // name this port gives one.
+        for (alias, expected) in [
+            (
+                "outer_member",
+                #"SELECT "outer_member".* FROM "path_members" AS "outer_member" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE "path_members"."id" = "outer_member"."id")"#
+            ),
+            (
+                "path_members",
+                #"SELECT "path_members".* FROM "path_members" AS "path_members" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id")"#
+            ),
+        ] {
+            let outer = PathMemberModel.as(alias)
+            let rendered = outer.query()
+                .whereExists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == outer.id))
+                .render()
+            #expect(rendered.sql == expected)
+        }
+    }
+
+    @Test func correlatedReusedExistsExpressionIsResolvedInEachEnclosingScope() {
+        let inner = PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == PathMemberModel.id)
+        let standalone = inner.render().description
+        let predicate = SQL.exists(inner)
+        let correlated = PathMemberModel.query().filter(predicate).render()
+        let local = PathOrganizationModel.query().filter(predicate).render()
+
+        #expect(
+            correlated.sql
+                == #"SELECT "path_members".* FROM "path_members" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id")"#
+        )
+        // No enclosing query has a member here, so the plain member column still refers to this query's owner join.
+        #expect(
+            local.sql
+                == #"SELECT "path_organizations".* FROM "path_organizations" WHERE EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE "path_members"."id" = "path_members"."id")"#
+        )
+        #expect(inner.render().description == standalone)
+    }
+
+    @Test func correlatedSiblingPathsKeepLocalComparisonsDistinctFromOuterColumns() {
+        let first = PathAssignmentModel.Relations.first
+        let rendered = PathMemberModel.query()
+            .whereExists(
+                PathAssignmentModel.query()
+                    .filter(first.id == PathMemberModel.id)
+                    .filter(first.score > PathAssignmentModel.Relations.second.score)
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "path_members".* FROM "path_members" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" LEFT JOIN "path_members" AS "path_assignments.first" ON "path_assignments.first"."id" = "path_assignments"."first_id" LEFT JOIN "path_members" AS "path_assignments.second" ON "path_assignments.second"."external_ref" = "path_assignments"."second_code" WHERE "path_assignments.first"."id" = "path_members"."id" AND "path_assignments.first"."score" > "path_assignments.second"."score")"#
+        )
+    }
+
+    @Test func correlatedSubqueriesInMutationsKeepTheOuterTargetColumn() {
+        let predicate = SQL.exists(PathRecordModel.query().filter(PathRecordModel.Relations.owner.id == PathMemberModel.id))
+        let subquery =
+            #"EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" AS "path_records.owner" ON "path_records.owner"."id" = "path_records"."owner_id" WHERE "path_records.owner"."id" = "path_members"."id")"#
+        let update = PathMemberModel.update().set(PathMemberModel.enabled, to: false).filter(predicate).render()
+        #expect(update.sql == #"UPDATE "path_members" SET "enabled" = $1 WHERE "# + subquery)
+        let delete = PathMemberModel.delete().filter(predicate).render()
+        #expect(delete.sql == #"DELETE FROM "path_members" WHERE "# + subquery)
+    }
 
     @Test func compilingAndCloningDoNotAccumulateJoinsOrChangeAliases() {
         let query = PathRecordModel.query().filter(PathRecordModel.Relations.owner.enabled == true)
@@ -255,7 +724,15 @@ import Testing
         #expect(query.render().description == first)
     }
 
-    // Waits for slice 20b: correlated_exists_uses_the_outer_joined_loading_alias
+    @Test func correlatedExistsUsesTheOuterJoinedLoadingAlias() {
+        let query: Query<PathRecordModel.Loaded<PathMemberModel?>> = PathRecordModel.query()
+            .with(\.owner, .joined)
+            .whereExists(PathAssignmentModel.query().filter(PathAssignmentModel.firstID == PathMemberModel.id))
+        #expect(
+            query.render().sql
+                == #"SELECT "path_records".*, "path_members"."id" AS "owner.id", "path_members"."organization_id" AS "owner.organization_id", "path_members"."label" AS "owner.label", "path_members"."enabled" AS "owner.enabled", "path_members"."score" AS "owner.score", "path_members"."note" AS "owner.note", "path_members"."external_ref" AS "owner.external_ref" FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE EXISTS (SELECT "path_assignments".* FROM "path_assignments" WHERE "path_assignments"."first_id" = "path_members"."id")"#
+        )
+    }
 
     @Test func filteringAndJoinedLoadingShareOneJoinRegardlessOfBuilderOrder() {
         let enabled = PathRecordModel.Relations.owner.enabled == true
