@@ -68,11 +68,70 @@ private func valueComparisonsFollowTheColumn() {
     let _: Expr<Bool> = NullabilityRowModel.nullableText.isNull
     let _: Expr<Bool> = NullabilityRowModel.nullableText.isNotNull
 
-    // Waits for slice 9: column-to-column comparisons and `isDistinct(from:)` / `isNotDistinct(from:)`, `Expr<Bool?>`
-    // when either column is nullable, `Expr<Bool>` for two required columns and for the distinct checks.
     // Waits for slice 15: `lowercased()` keeping nullability, comparisons on it, `SQL.coalesce`, `SQL.greatest` and
     // `SQL.least` (a required argument makes them required).
     // Waits for slice 10: comparisons on nullable arithmetic such as `nullableCount + requiredCount`.
+}
+
+// rust-dbkit's `eq_col`, `ne_col`, `lt_col`, `le_col`, `gt_col` and `ge_col` are the operators between two columns, and
+// so is its `lt` with a column as the value.
+private func columnComparisonsAreNullableWhenEitherColumnIs() {
+    let _: Expr<Bool> = NullabilityRowModel.requiredText == NullabilityRowModel.requiredText
+    let _: Expr<Bool> = NullabilityRowModel.requiredText != NullabilityRowModel.requiredText
+    let _: Expr<Bool?> = NullabilityRowModel.requiredText == NullabilityRowModel.nullableText
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText == NullabilityRowModel.requiredText
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText == NullabilityRowModel.nullableText
+    let _: Expr<Bool?> = NullabilityRowModel.requiredText != NullabilityRowModel.nullableText
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText != NullabilityRowModel.requiredText
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText != NullabilityRowModel.nullableText
+
+    let _: Expr<Bool> = NullabilityRowModel.requiredText.isDistinct(from: NullabilityRowModel.nullableText)
+    let _: Expr<Bool> = NullabilityRowModel.nullableText.isDistinct(from: NullabilityRowModel.requiredText)
+    let _: Expr<Bool> = NullabilityRowModel.nullableText.isDistinct(from: NullabilityRowModel.nullableText)
+    let _: Expr<Bool> = NullabilityRowModel.requiredText.isNotDistinct(from: NullabilityRowModel.nullableText)
+    let _: Expr<Bool> = NullabilityRowModel.nullableText.isNotDistinct(from: NullabilityRowModel.requiredText)
+    let _: Expr<Bool> = NullabilityRowModel.nullableText.isNotDistinct(from: NullabilityRowModel.nullableText)
+
+    let _: Expr<Bool> = NullabilityRowModel.requiredCount < NullabilityRowModel.requiredCount
+    let _: Expr<Bool> = NullabilityRowModel.requiredCount <= NullabilityRowModel.requiredCount
+    let _: Expr<Bool> = NullabilityRowModel.requiredCount > NullabilityRowModel.requiredCount
+    let _: Expr<Bool> = NullabilityRowModel.requiredCount >= NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = NullabilityRowModel.requiredCount < NullabilityRowModel.nullableCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount < NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount < NullabilityRowModel.nullableLimit
+    let _: Expr<Bool?> = NullabilityRowModel.requiredCount <= NullabilityRowModel.nullableCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount <= NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount <= NullabilityRowModel.nullableLimit
+    let _: Expr<Bool?> = NullabilityRowModel.requiredCount > NullabilityRowModel.nullableCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount > NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount > NullabilityRowModel.nullableLimit
+    let _: Expr<Bool?> = NullabilityRowModel.requiredCount >= NullabilityRowModel.nullableCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount >= NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = NullabilityRowModel.nullableCount >= NullabilityRowModel.nullableLimit
+
+    // An expression on either side follows the same rule.
+    let _: Expr<Bool> = (NullabilityRowModel.nullableText ?? "fallback") == NullabilityRowModel.requiredText
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText == (NullabilityRowModel.nullableText ?? "fallback")
+    let _: Expr<Bool?> = (NullabilityRowModel.nullableCount ?? 0) < NullabilityRowModel.nullableLimit
+    let _: Expr<Bool> = NullabilityRowModel.requiredCount.isDistinct(from: NullabilityRowModel.nullableCount ?? 0)
+
+    let nullableComparison: Expr<Bool?> = NullabilityRowModel.nullableText == NullabilityRowModel.requiredText
+    let requiredComparison: Expr<Bool> = NullabilityRowModel.requiredText == NullabilityRowModel.requiredText
+    let _: Expr<Bool?> = nullableComparison && requiredComparison
+    let _: Expr<Bool?> = requiredComparison && nullableComparison
+    let _: Expr<Bool?> = nullableComparison && (NullabilityRowModel.nullableText != NullabilityRowModel.requiredText)
+    let _: Expr<Bool?> = nullableComparison || requiredComparison
+    let _: Expr<Bool?> = requiredComparison || nullableComparison
+    let _: Expr<Bool?> = nullableComparison || (NullabilityRowModel.nullableText != NullabilityRowModel.requiredText)
+    let _: Expr<Bool?> = !nullableComparison
+
+    _ = NullabilityRowModel.query()
+        .filter(nullableComparison)
+        .filter(nullableComparison && NullabilityRowModel.id > 0)
+    _ = NullabilityRowModel.update().set(NullabilityRowModel.requiredText, to: "updated").filter(nullableComparison)
+    _ = NullabilityRowModel.delete().filter(nullableComparison)
+    // Waits for slice 15: `lowercased()` of a required column compared with a nullable one and the reverse, `Expr<Bool?>`.
+    // Waits for slice 10: `nullableCount + requiredCount` compared with `requiredCount` by each operator, `Expr<Bool?>`.
 }
 
 private func fallbacksAreRequired() {

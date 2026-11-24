@@ -70,6 +70,48 @@ import Testing
         #expect(empty.binds.isEmpty)
     }
 
+    /// `TodoModel` stands in for the kit's `TaskModel`, whose enum columns arrive in slice 26.
+    @Test func rowValuesEnumsAndColumnComparisons() {
+        let rendered = TodoModel.query()
+            .filter(TodoModel.note.isDistinct(from: TodoModel.title))
+            .render()
+        #expect(rendered.sql == #"SELECT "todos".* FROM "todos" WHERE "todos"."note" IS DISTINCT FROM "todos"."title""#)
+        #expect(rendered.binds.isEmpty)
+        // Waits for slice 13: `SQL.row(TaskModel.state, TaskModel.title).in([(.pendingReview, "alpha"), (.completed, "beta")])`.
+        // Waits for slice 26: `TaskModel.state.in([.inProgress])` and `TaskModel.previousState.isDistinct(from: TaskModel.state)`.
+        // Waits for slice 10: `TaskModel.attempts + 1 < TaskModel.attempts * 2`, rendered `("tasks"."attempts" + $6) < ("tasks"."attempts" * $7)`.
+    }
+
+    /// The NULL-safe comparisons are never NULL, on either nullability and against values, `nil` and columns.
+    @Test func distinctChecksTakeValuesNilAndColumns() {
+        let changed: Expr<Bool> = TodoModel.note.isDistinct(from: "today")
+        let missing: Expr<Bool> = TodoModel.note.isNotDistinct(from: nil)
+        let renamed: Expr<Bool> = TodoModel.title.isDistinct(from: "Ship it")
+        let kept: Expr<Bool> = TodoModel.title.isNotDistinct(from: "Ship it")
+        let noteIsTitle: Expr<Bool> = TodoModel.title.isNotDistinct(from: TodoModel.note)
+        let rendered = TodoModel.query().filter(changed).filter(missing).filter(renamed).filter(kept).filter(noteIsTitle).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "todos".* FROM "todos" WHERE "todos"."note" IS DISTINCT FROM $1 AND "todos"."note" IS NOT DISTINCT FROM NULL AND "todos"."title" IS DISTINCT FROM $2 AND "todos"."title" IS NOT DISTINCT FROM $3 AND "todos"."title" IS NOT DISTINCT FROM "todos"."note""#
+        )
+        #expect(rendered.binds.map(\.description) == ["today", "Ship it", "Ship it"])
+    }
+
+    /// PostgreSQL rejects `a = b > c`, since its comparison operators don't chain, so a comparison inside another
+    /// comparison is parenthesized, as rust-dbkit parenthesizes every nested binary expression.
+    @Test func nestedComparisonsAreParenthesized() {
+        let rendered = TodoModel.query()
+            .filter(TodoModel.isComplete == (TodoModel.id > 0))
+            .filter((TodoModel.userID <= 9) != TodoModel.isComplete)
+            .filter(TodoModel.isComplete.isDistinct(from: TodoModel.title == "Done"))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "todos".* FROM "todos" WHERE "todos"."is_complete" = ("todos"."id" > $1) AND ("todos"."user_id" <= $2) <> "todos"."is_complete" AND "todos"."is_complete" IS DISTINCT FROM ("todos"."title" = $3)"#
+        )
+        #expect(rendered.binds.map(\.description) == ["0", "9", "Done"])
+    }
+
     @Test func mutations() {
         let insert = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
             .returningAll()

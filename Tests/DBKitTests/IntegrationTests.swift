@@ -392,7 +392,7 @@ class ValueRowModel {
             try await tx.query("INSERT INTO sales (region, amount, created_at) VALUES ('read', 1, \(stored + "+00")::timestamptz)")
             let read = try #require(try await SaleModel.query().first(on: tx))
             #expect(try await SaleModel.query().filter(SaleModel.createdAt == read.createdAt).all(on: tx).count == 1)
-            // Waits for slice 9: the optional filter value `SaleModel.createdAt == Expr<Date?>.value(read.createdAt)` finds it too.
+            #expect(try await SaleModel.query().filter(SaleModel.createdAt == Expr<Date?>.value(read.createdAt)).all(on: tx).count == 1)
 
             var active = read.active()
             active.createdAt = read.createdAt
@@ -407,6 +407,38 @@ class ValueRowModel {
                 "SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') FROM sales ORDER BY id")
             for try await text in rows.decode(String.self) { written.append(text) }
             #expect(written == [stored, stored, stored])
+        }
+    }
+
+    /// PostgreSQL rejects a comparison inside another one unless it is parenthesized.
+    @Test func comparisonsOfComparisonsRun() async throws {
+        try await withRollback { tx in
+            try await tx.query(
+                """
+                CREATE TEMP TABLE todos (
+                    id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, title TEXT NOT NULL, note TEXT,
+                    is_complete BOOLEAN NOT NULL DEFAULT false
+                )
+                """)
+            try await TodoModel.insert([
+                TodoModel.Insert(userID: 1, title: "open, first user", isComplete: false),
+                TodoModel.Insert(userID: 2, title: "done, second user", isComplete: true),
+                TodoModel.Insert(userID: 2, title: "open, second user", isComplete: false),
+                TodoModel.Insert(userID: 1, title: "done, first user", isComplete: true),
+            ])
+            .execute(on: tx)
+
+            let matching = try await TodoModel.query()
+                .filter(TodoModel.isComplete == (TodoModel.userID > 1))
+                .orderBy(TodoModel.id.asc)
+                .all(on: tx)
+            #expect(matching.map(\.title) == ["open, first user", "done, second user"])
+
+            let mismatching = try await TodoModel.query()
+                .filter((TodoModel.userID > 1).isDistinct(from: TodoModel.isComplete))
+                .orderBy(TodoModel.id.asc)
+                .all(on: tx)
+            #expect(mismatching.map(\.title) == ["open, second user", "done, first user"])
         }
     }
 
