@@ -4,7 +4,7 @@ public protocol SQLArgument<Value>: Sendable {
     var sqlNode: SQLNode { get }
 }
 
-/// A typed SQL expression: columns, operator results.
+/// A typed SQL expression: columns, function calls, operator results.
 ///
 /// Plain Swift values are deliberately not expressions, so DBKit's operators never interfere with ordinary
 /// Swift arithmetic or comparisons.
@@ -37,6 +37,21 @@ public struct Column<Model: DBKit.Model, Value: SQLType>: SQLExpression {
     }
 
     public var sqlNode: SQLNode { .column(ColumnReference(table: Model.schema.table, name: name)) }
+}
+
+/// An aggregate function call. Only aggregates accept a `FILTER (WHERE …)` clause.
+public struct AggregateExpr<Value: SQLType>: SQLExpression {
+    public let sqlNode: SQLNode
+
+    init(_ sqlNode: SQLNode) {
+        self.sqlNode = sqlNode
+    }
+
+    /// Restricts the rows this aggregate sees: `COUNT(x) FILTER (WHERE …)`. PostgreSQL takes one filter, right after
+    /// the aggregate call, so the result is a plain expression without `filter`.
+    public func filter<P: SQLExpression>(_ predicate: P) -> Expr<Value> where P.Value.NonNull == Bool {
+        Expr(.sequence([sqlNode, .raw(" FILTER (WHERE "), predicate.sqlNode, .raw(")")]))
+    }
 }
 
 /// A sort key for `orderBy`.

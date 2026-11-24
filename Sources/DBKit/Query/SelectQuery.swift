@@ -25,6 +25,17 @@ extension SelectQuery {
 
     public func distinct() -> Self { updating { $0.distinct = true } }
 
+    public func groupBy<each E: SQLExpression>(_ expressions: repeat each E) -> Self {
+        var nodes: [SQLNode] = []
+        for expression in repeat each expressions { nodes.append(expression.sqlNode) }
+        return updating { $0.groupBy += nodes }
+    }
+
+    /// Filters groups after aggregation.
+    public func having<P: SQLExpression>(_ predicate: P) -> Self where P.Value.NonNull == Bool {
+        updating { $0.having.append(predicate.sqlNode) }
+    }
+
     func filtered(_ node: SQLNode) -> Self { updating { $0.filters.append(node) } }
 
     func updating(_ change: (inout SelectStatement) -> Void) -> Self {

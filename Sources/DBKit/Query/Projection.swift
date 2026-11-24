@@ -23,7 +23,7 @@ public struct Projection<each Value: SQLType>: SelectQuery {
         }
     }
 
-    /// The first row (`LIMIT 1`).
+    /// The first row (`LIMIT 1`). Aggregates without `GROUP BY` always return one row.
     public func first(on executor: some DatabaseExecutor) async throws -> (repeat each Value)? {
         try await limit(1).all(on: executor).first
     }
@@ -79,7 +79,7 @@ public struct ProjectionQuery<Row: Sendable>: SelectQuery {
         }
     }
 
-    /// The first row (`LIMIT 1`).
+    /// The first row (`LIMIT 1`). Aggregates without `GROUP BY` always return one row.
     public func first(on executor: some DatabaseExecutor) async throws -> Row? {
         try await limit(1).all(on: executor).first
     }

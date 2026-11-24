@@ -5,6 +5,8 @@ public struct SelectStatement: Sendable {
     var items: [SelectItem]?
     var distinct = false
     var filters: [SQLNode] = []
+    var groupBy: [SQLNode] = []
+    var having: [SQLNode] = []
     var orderBy: [OrderBy] = []
     var limit: Int?
     var offset: Int?
@@ -45,6 +47,12 @@ final class SQLRenderer {
         var clauses: [String] = []
         if !statement.filters.isEmpty {
             clauses.append("WHERE " + statement.filters.map { render($0) }.joined(separator: " AND "))
+        }
+        if !statement.groupBy.isEmpty {
+            clauses.append("GROUP BY " + statement.groupBy.map { render($0) }.joined(separator: ", "))
+        }
+        if !statement.having.isEmpty {
+            clauses.append("HAVING " + statement.having.map { render($0) }.joined(separator: " AND "))
         }
         if !statement.orderBy.isEmpty {
             let orders = statement.orderBy.map { render($0.node) + ($0.descending ? " DESC" : " ASC") }

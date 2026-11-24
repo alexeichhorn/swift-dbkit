@@ -31,6 +31,31 @@ public enum SQL {
         return RowValue(nodes: nodes)
     }
 
+    // MARK: Aggregates
+
+    /// `COUNT(expression)`: counts non-null values.
+    public static func count(_ expression: some SQLExpression) -> AggregateExpr<Int64> {
+        AggregateExpr(.function("COUNT", [expression.sqlNode]))
+    }
+
+    /// `COUNT(*)`.
+    public static func countAll() -> AggregateExpr<Int64> { AggregateExpr(.raw("COUNT(*)")) }
+
+    /// `SUM(expression)`. NULL without input rows; integer sums widen like PostgreSQL (`bigint` sums are `numeric`).
+    public static func sum<E: SQLExpression>(_ expression: E) -> AggregateExpr<E.Value.NonNull.Sum?> where E.Value.NonNull: SQLSummable {
+        AggregateExpr(.function("SUM", [expression.sqlNode]))
+    }
+
+    /// `MIN(expression)`. NULL without input rows.
+    public static func min<E: SQLExpression>(_ expression: E) -> AggregateExpr<E.Value.NonNull?> {
+        AggregateExpr(.function("MIN", [expression.sqlNode]))
+    }
+
+    /// `MAX(expression)`. NULL without input rows.
+    public static func max<E: SQLExpression>(_ expression: E) -> AggregateExpr<E.Value.NonNull?> {
+        AggregateExpr(.function("MAX", [expression.sqlNode]))
+    }
+
     // MARK: Intervals
 
     public static func interval<E: SQLArgument>(days: E) -> Expr<E.Value.AsInterval> where E.Value.NonNull: SQLNumeric {

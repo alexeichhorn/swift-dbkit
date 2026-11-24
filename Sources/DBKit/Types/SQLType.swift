@@ -55,6 +55,11 @@ public protocol SQLNumeric: SQLAdditive {}
 /// Integer types that support bitwise operators in SQL expressions.
 public protocol SQLInteger: SQLNumeric {}
 
+/// Types accepted by `SQL.sum`, with PostgreSQL's widened result type.
+public protocol SQLSummable: SQLValue {
+    associatedtype Sum: SQLValue
+}
+
 /// `Int16`, `Int32` and `Int64`, the integers whose Swift type names their width. Bitwise operators between integer
 /// types take a plain value only of these, so an untyped literal, which defaults to `Int`, takes the other operand's type.
 public protocol SQLSizedInteger: SQLInteger, SQLMixedNumeric {}
@@ -88,53 +93,62 @@ extension Date: SQLTextCastable, SQLCastPartner {
     public static var sqlTypeName: String { "timestamptz" }
     public typealias CastPartner = Date
 }
-extension Interval: SQLAdditive, SQLTextCastable {}
+extension Interval: SQLAdditive, SQLTextCastable, SQLSummable { public typealias Sum = Interval }
 extension Data: SQLValue { public static var sqlTypeName: String { "bytea" } }
 
-extension Int16: SQLSizedInteger, SQLTextCastable {
+extension Int16: SQLSizedInteger, SQLTextCastable, SQLSummable {
     public static var sqlTypeName: String { "smallint" }
+    public typealias Sum = Int64
     public typealias WithInt16 = Int16
     public typealias WithInt32 = Int32
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Int32: SQLSizedInteger, SQLTextCastable, SQLCastPartner {
+extension Int32: SQLSizedInteger, SQLTextCastable, SQLCastPartner, SQLSummable {
     public static var sqlTypeName: String { "integer" }
+    public typealias Sum = Int64
     public typealias CastPartner = Bool
     public typealias WithInt16 = Int32
     public typealias WithInt32 = Int32
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Int64: SQLSizedInteger, SQLTextCastable {
+extension Int64: SQLSizedInteger, SQLTextCastable, SQLSummable {
     public static var sqlTypeName: String { "bigint" }
+    public typealias Sum = Decimal
     public typealias WithInt16 = Int64
     public typealias WithInt32 = Int64
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Int: SQLInteger, SQLMixedNumeric, SQLTextCastable {
+extension Int: SQLInteger, SQLMixedNumeric, SQLTextCastable, SQLSummable {
     public static var sqlTypeName: String { "bigint" }
+    public typealias Sum = Decimal
     public typealias WithInt16 = Int64
     public typealias WithInt32 = Int64
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Float: SQLNumeric, SQLMixedNumeric, SQLTextCastable {
+extension Float: SQLNumeric, SQLMixedNumeric, SQLTextCastable, SQLSummable {
     public static var sqlTypeName: String { "real" }
+    public typealias Sum = Float
     public typealias WithInt16 = Double
     public typealias WithInt32 = Double
     public typealias WithInt64 = Double
     public typealias WithFloat = Float
 }
-extension Double: SQLNumeric, SQLMixedNumeric, SQLTextCastable {
+extension Double: SQLNumeric, SQLMixedNumeric, SQLTextCastable, SQLSummable {
     public static var sqlTypeName: String { "double precision" }
+    public typealias Sum = Double
     public typealias WithInt16 = Double
     public typealias WithInt32 = Double
     public typealias WithInt64 = Double
     public typealias WithFloat = Double
 }
-extension Decimal: SQLNumeric, SQLTextCastable { public static var sqlTypeName: String { "numeric" } }
+extension Decimal: SQLNumeric, SQLTextCastable, SQLSummable {
+    public static var sqlTypeName: String { "numeric" }
+    public typealias Sum = Decimal
+}
 
 extension Optional: SQLMixedNumeric where Wrapped: SQLMixedNumeric & SQLValue {
     public typealias WithInt16 = Wrapped.WithInt16?
