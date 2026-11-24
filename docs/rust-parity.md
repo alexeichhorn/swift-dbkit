@@ -70,6 +70,8 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `??` between two nullable expressions of the same type, such as `email ?? backupEmail`, renders `COALESCE`. | The kit's overloads lost to the standard library's `??`, which returned the left column and dropped the fallback. |
 | `cast(to:)` accepts only the casts PostgreSQL has: between the numeric types, from `String` to `Bool`, `UUID`, `Date`, `Interval`, `String` and the numeric types and from each of these to `String`, between `Int32` and `Bool`, and from `Date` to `Date`. | The kit accepted any pair, such as `Date` to `Double`, which PostgreSQL rejects at run time. rust-dbkit accepts the same casts. |
 | `+`, `-`, `*` and `/` accept operands of different numeric types and give PostgreSQL's result type, such as `Expr<Int64>` for `Int32` with `Int64`. | The kit required both operands to have the same type; see "Ported Beyond The Kit". |
+| `Condition.predicate` is `Expr<Bool?>?` instead of `Expr<Bool>?`. Code that stored it as `Expr<Bool>?` changes the annotation. | See "A condition's predicate" under "Different On Purpose". |
+| `SQL.row` takes two to six columns, one overload per arity, instead of any number through a parameter pack. Its tuples take each column's own type, and `in` is `Expr<Bool?>` when a column is nullable. | With a parameter pack, Swift types an integer literal in `SQL.row(…).in([(7, 8)])` as `Int` before it resolves the pack, so the tuple doesn't match `Int64` columns. |
 
 ## Rust Tests Without A Swift Counterpart
 

@@ -1,6 +1,6 @@
 # Querying
 
-The examples use the `UserModel` and `TodoModel` from the [README](../README.md).
+The examples use the `UserModel` and `TodoModel` from the [README](../README.md) plus the models declared below.
 
 ## Basic Query + Ordering
 
@@ -44,6 +44,65 @@ Any query can show its SQL without a database: `render()` returns the SQL and bi
 let rendered = todos.render()
 // SELECT "todos".* FROM "todos" WHERE ("todos"."user_id" = $1 AND ("todos"."title" LIKE $2 OR NOT ("todos"."is_complete")))
 // rendered.binds: 7, "Buy%"
+```
+
+## Row-Value Filters
+
+```swift
+@Model(table: "lookup_rows")
+class LookupRowModel {
+    @Key @AutoIncrement var id: Int64
+    var scope: String
+    var externalKey: String
+    var locale: String?
+}
+```
+
+```swift
+let rows = try await LookupRowModel.query()
+    .filter(
+        SQL.row(LookupRowModel.scope, LookupRowModel.externalKey, LookupRowModel.locale).in([
+            ("public", "alpha", "en"),
+            ("internal", "beta", nil),
+        ])
+    )
+    .all(on: db)
+```
+
+`SQL.row` takes two to six columns. Each tuple value has its column's type, so a wrong type or tuple length doesn't
+compile, an integer literal takes its column's integer type, and a nullable column takes an optional or `nil`, rendered
+`NULL`. `in` is `Expr<Bool?>` when a column is nullable and `Expr<Bool>` otherwise. A row containing NULL never
+matches, since PostgreSQL compares it as NULL: the `("internal", "beta", nil)` row above matches nothing. `in` with an
+empty array matches nothing.
+
+## Dynamic Conditions
+
+```swift
+func users(region: String?, name: String?, on db: Database) async throws -> [UserModel] {
+    var condition = Condition.all
+    if let region { condition.add(UserModel.email.ilike("%.\(region)")) }
+    if let name { condition.add(UserModel.name == name) }
+    return try await UserModel.query().filter(condition).all(on: db)
+}
+```
+
+`Condition.any` combines with `OR`. `add` takes required and nullable predicates. An empty condition adds no filter:
+its `isEmpty` is `true` and its `predicate` is `nil`. Otherwise `predicate` is an `Expr<Bool?>`, even when every added
+predicate is required. Updates and deletes filter by the unwrapped predicate, and a condition nests in another the same
+way:
+
+```swift
+var owners = Condition.any
+owners.add(TodoModel.userID == 1)
+owners.add(TodoModel.userID == 2)
+
+var condition = Condition.all
+condition.add(TodoModel.isComplete == true)
+if let owned = owners.predicate { condition.add(owned) }
+
+if let predicate = condition.predicate {
+    try await TodoModel.delete().filter(predicate).execute(on: db)
+}
 ```
 
 ## Column-To-Column Comparisons
