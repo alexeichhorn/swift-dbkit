@@ -96,3 +96,37 @@ let inserted = try await UserModel.insert([
 ```
 
 An empty array sends no statement and returns 0.
+
+## Insert Conflict Handling
+
+Conflict targets and update columns must be columns of the inserted model:
+
+```swift
+@Model(table: "order_lines")
+class OrderLineModel {
+    @Key var orderID: Int64
+    @Key var lineID: Int64
+    var note: String
+}
+```
+
+```swift
+let ignored = try await UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
+    .onConflictDoNothing(UserModel.email)
+    .execute(on: db)  // 0 when the email exists
+
+let line = try await OrderLineModel.insert(OrderLineModel.Insert(orderID: 7, lineID: 8, note: "Updated via upsert"))
+    .onConflict(OrderLineModel.orderID, OrderLineModel.lineID, doUpdate: OrderLineModel.note)
+    .returningAll()
+    .first(on: db)
+```
+
+`onConflictDoNothing()` without columns ignores any unique violation.
+
+Both column lists of `onConflict` can also be tuples, so one list can be kept in a constant and reused:
+
+```swift
+let lineKey = (OrderLineModel.orderID, OrderLineModel.lineID)
+let insert = OrderLineModel.insert(OrderLineModel.Insert(orderID: 7, lineID: 9, note: "New"))
+    .onConflict(lineKey, doUpdate: OrderLineModel.note)
+```
