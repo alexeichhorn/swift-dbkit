@@ -75,6 +75,40 @@ compile, an integer literal takes its column's integer type, and a nullable colu
 matches, since PostgreSQL compares it as NULL: the `("internal", "beta", nil)` row above matches nothing. `in` with an
 empty array matches nothing.
 
+## Streaming
+
+`.stream(on:)` yields rows one at a time instead of collecting an array:
+
+```swift
+for try await user in try await UserModel.query().orderBy(UserModel.id.asc).stream(on: db) {
+    print(user.email)
+}
+```
+
+The stream reads through a server-side cursor, 1,000 rows per round trip, so PostgreSQL only produces the rows that
+are fetched. Leaving the loop early stops fetching: the cursor is closed and the rest of the result is never read.
+Eager loading isn't supported (`stream` is only available on queries without `.with(...)`). When you know the count
+up front, `.limit(n)` is better because PostgreSQL can plan for it.
+
+[Projections](expressions.md#aggregation-and-projections) stream the same way, with `stream(on:)` for typed tuples
+and `@Projection` types and `stream(as:on:)` for a `Decodable` type, mirroring `all(on:)` and `all(as:on:)`:
+
+```swift
+let totals = try await SaleModel.query()
+    .select(SaleModel.region, SQL.sum(SaleModel.amount))
+    .groupBy(SaleModel.region)
+    .stream(on: db)
+for try await (region, total) in totals {
+    print(region, total ?? 0)
+}
+```
+
+A cursor lives in a transaction. On a `Database` the stream takes one pooled connection with its first row, opens a
+transaction on it and gives the connection back when it ends or is dropped; other queries on the pool use other
+connections meanwhile. Inside `db.transaction` the stream reads on the transaction's connection and only closes its
+cursor: the transaction stays open, and it answers other queries while the loop runs. `stream(on:)` takes one of
+these two.
+
 ## Row Locking
 
 ```swift

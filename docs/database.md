@@ -66,8 +66,9 @@ the next user of the pooled connection.
 
 ## Executors
 
-Every query method takes `some DatabaseExecutor`: a `Database` or a `Transaction`. Write helpers against the protocol
-to use them with both:
+Every query method takes `some DatabaseExecutor`: a `Database` or a `Transaction`. Only `stream(on:)` is narrower: it
+takes a `Database` or a `Transaction` itself, not the protocol. Write helpers against the protocol to use them with
+both:
 
 ```swift
 func activeUsers(on executor: some DatabaseExecutor) async throws -> [UserModel] {
