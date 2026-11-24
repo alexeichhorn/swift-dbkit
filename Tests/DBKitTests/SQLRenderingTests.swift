@@ -86,8 +86,33 @@ class LeaseModel {
             filtered
                 == #"SELECT DISTINCT "users".* FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id" WHERE "todos"."title" = $1"#
         )
-        // Waits for slice 22: `forUpdate(.skipLocked)` on its own and `leftJoin(\.todos).forUpdate(.noWait)` locking
-        // `FOR UPDATE OF "users" NOWAIT`.
+        #expect(UserModel.query().forUpdate(.skipLocked).render().sql == #"SELECT "users".* FROM "users" FOR UPDATE SKIP LOCKED"#)
+        #expect(
+            UserModel.query().leftJoin(\.todos).forUpdate(.noWait).render().sql
+                == #"SELECT "users".* FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id" FOR UPDATE OF "users" NOWAIT"#
+        )
+    }
+
+    /// PostgreSQL names an aliased table by its alias in `FOR UPDATE OF`.
+    @Test func rowLocksUseTheTableAlias() {
+        let author = UserModel.as("author")
+        #expect(author.query().forUpdate().render().sql == #"SELECT "author".* FROM "users" AS "author" FOR UPDATE"#)
+        #expect(
+            author.query().leftJoin(\.todos).forUpdate(.skipLocked).render().sql
+                == #"SELECT "author".* FROM "users" AS "author" LEFT JOIN "todos" ON "todos"."user_id" = "author"."id" FOR UPDATE OF "author" SKIP LOCKED"#
+        )
+    }
+
+    /// A subquery keeps its own lock, so `EXISTS` skips the rows other transactions hold.
+    @Test func lockedSubqueriesKeepTheirLock() {
+        let rendered = UserModel.query()
+            .whereExists(TodoModel.query().forUpdate(.skipLocked).select(TodoModel.id).filter(TodoModel.userID == UserModel.id))
+            .forUpdate()
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users".* FROM "users" WHERE EXISTS (SELECT "todos"."id" FROM "todos" WHERE "todos"."user_id" = "users"."id" FOR UPDATE SKIP LOCKED) FOR UPDATE"#
+        )
     }
 
     /// A join of a relation that is also loaded `.joined` is shared, with the explicit join's kind. A joined model's

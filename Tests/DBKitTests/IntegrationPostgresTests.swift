@@ -2,6 +2,31 @@ import DBKit
 import Foundation
 import Testing
 
+/// rust-dbkit's `LockRow`, once per locking test that needs a real table, without its `token`.
+@Model(table: "blocking_lock_rows")
+class BlockingLockRowModel {
+    @Key @AutoIncrement var id: Int64
+    var note: String
+}
+
+@Model(table: "skip_locked_rows")
+class SkipLockedRowModel {
+    @Key @AutoIncrement var id: Int64
+    var note: String
+}
+
+@Model(table: "nowait_lock_rows")
+class NoWaitLockRowModel {
+    @Key @AutoIncrement var id: Int64
+    var note: String
+}
+
+@Model(table: "limit_lock_rows")
+class LimitLockRowModel {
+    @Key @AutoIncrement var id: Int64
+    var note: String
+}
+
 @Suite struct IntegrationPostgresTests {
     @Test func insertUpdateDeleteRoundtrip() async throws {
         try await withRollback { tx in
@@ -2607,6 +2632,118 @@ import Testing
             }
             #expect(error.serverInfo?[.message]?.contains("invalid regular expression") == true)
         }
+    }
+
+    // The locking tests hold a lock in one transaction and query from another, on a real table of their own, since a
+    // `TEMP` table is visible to one session only. rust-dbkit's tests share one table and tell their rows apart by a token.
+
+    @Test(.timeLimit(.minutes(1))) func lockingForUpdateBlocksUntilFirstTransactionReleasesLock() async throws {
+        try await withRealTable("blocking_lock_rows", columns: lockRowColumns) { db in
+            let rowID = try #require(
+                try await BlockingLockRowModel.insert(BlockingLockRowModel.Insert(note: "row-1")).returningAll().first(on: db)?.id)
+
+            let waiter = try await db.transaction { tx1 in
+                let locked = try await BlockingLockRowModel.query().filter(BlockingLockRowModel.id == rowID).forUpdate().first(on: tx1)
+                #expect(locked != nil)
+                let holder = try #require(try await tx1.query("SELECT pg_backend_pid()").collect().first?.decode(Int32.self))
+
+                let waiter = Task {
+                    try await db.transaction { tx2 in
+                        try await BlockingLockRowModel.query().filter(BlockingLockRowModel.id == rowID).forUpdate().first(on: tx2)?.id
+                    }
+                }
+                try await waitUntilBlocked(by: holder, on: db)
+                return waiter
+            }
+
+            // The first transaction committed when its body returned, which released the lock.
+            #expect(try await waiter.value == rowID)
+        }
+    }
+
+    @Test func lockingSkipLockedSkipsRowsLockedByAnotherTransaction() async throws {
+        try await withRealTable("skip_locked_rows", columns: lockRowColumns) { db in
+            let first = try #require(
+                try await SkipLockedRowModel.insert(SkipLockedRowModel.Insert(note: "first")).returningAll().first(on: db))
+            let second = try #require(
+                try await SkipLockedRowModel.insert(SkipLockedRowModel.Insert(note: "second")).returningAll().first(on: db))
+
+            try await db.transaction { tx1 in
+                let lockedFirst = try await SkipLockedRowModel.query().filter(SkipLockedRowModel.id == first.id).forUpdate().first(on: tx1)
+                #expect(lockedFirst != nil)
+
+                let ids = try await db.transaction { tx2 in
+                    try await SkipLockedRowModel.query().orderBy(SkipLockedRowModel.id.asc).forUpdate(.skipLocked).all(on: tx2).map(\.id)
+                }
+                #expect(ids == [second.id])
+            }
+        }
+    }
+
+    @Test func lockingNowaitErrorsImmediatelyWhenRowIsLocked() async throws {
+        try await withRealTable("nowait_lock_rows", columns: lockRowColumns) { db in
+            let row = try #require(
+                try await NoWaitLockRowModel.insert(NoWaitLockRowModel.Insert(note: "locked")).returningAll().first(on: db))
+
+            try await db.transaction { tx1 in
+                _ = try await NoWaitLockRowModel.query().filter(NoWaitLockRowModel.id == row.id).forUpdate().first(on: tx1)
+
+                let error = try await #require(throws: PSQLError.self, "NOWAIT should fail when the row is already locked") {
+                    try await db.transaction { tx2 in
+                        _ = try await NoWaitLockRowModel.query().filter(NoWaitLockRowModel.id == row.id).forUpdate(.noWait).first(on: tx2)
+                    }
+                }
+                #expect(error.serverInfo?[.sqlState] == "55P03")
+            }
+        }
+    }
+
+    /// Without contention, one transaction suffices, so this one locks a row of a `TEMP` table.
+    @Test func lockingNowaitSucceedsWithoutLockContention() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user = try await seedUser(on: tx, name: "Free", email: "free@db.com")
+
+            let selected = try await UserModel.query().filter(UserModel.id == user.id).forUpdate(.noWait).first(on: tx)
+            #expect(selected?.id == user.id)
+        }
+    }
+
+    @Test func lockingForUpdateWithLimitLocksOnlySelectedRows() async throws {
+        try await withRealTable("limit_lock_rows", columns: lockRowColumns) { db in
+            let first = try #require(
+                try await LimitLockRowModel.insert(LimitLockRowModel.Insert(note: "first")).returningAll().first(on: db))
+            let second = try #require(
+                try await LimitLockRowModel.insert(LimitLockRowModel.Insert(note: "second")).returningAll().first(on: db))
+
+            try await db.transaction { tx1 in
+                let selected = try await LimitLockRowModel.query().orderBy(LimitLockRowModel.id.asc).limit(1).forUpdate().all(on: tx1)
+                #expect(selected.map(\.id) == [first.id])
+
+                // The failed query aborts the second transaction, so the query that succeeds runs first.
+                let error = try await #require(throws: PSQLError.self, "first row should be locked by tx1") {
+                    try await db.transaction { tx2 in
+                        let secondRow = try await LimitLockRowModel.query()
+                            .filter(LimitLockRowModel.id == second.id)
+                            .forUpdate(.noWait)
+                            .first(on: tx2)
+                        #expect(secondRow?.id == second.id, "second row should not be locked by tx1")
+                        _ = try await LimitLockRowModel.query().filter(LimitLockRowModel.id == first.id).forUpdate(.noWait).first(on: tx2)
+                    }
+                }
+                #expect(error.serverInfo?[.sqlState] == "55P03")
+            }
+        }
+    }
+}
+
+private let lockRowColumns = "id BIGSERIAL PRIMARY KEY, note TEXT NOT NULL"
+
+/// Returns once another connection waits for a lock held by the backend with process ID `holder`.
+private func waitUntilBlocked(by holder: Int32, on db: Database) async throws {
+    let blocked: PostgresQuery = "SELECT count(*) FROM pg_stat_activity WHERE \(holder) = ANY(pg_blocking_pids(pid))"
+    while try await db.query(blocked).collect().first?.decode(Int64.self) == 0 {
+        try await Task.sleep(for: .milliseconds(10))
     }
 }
 

@@ -61,6 +61,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 ## Different On Purpose
 
 - **Regex flags.** `SQL.regexReplace` and `SQL.regexSplit` default their flags to none, so a call without flags replaces the first match and splits case-sensitively. rust-dbkit requires the flags argument.
+- **Lock scope with joins.** A lock on a query with any join is scoped to the query's own table (`FOR UPDATE OF "users"`), so joined rows stay unlocked. rust-dbkit scopes the lock only when the query has a left join; with inner joins it locks the joined rows too.
 - **Counting a query with joins.** rust-dbkit counts the rows of the joined query, so a user with three joined todos counts three times. `count`, `exists` and `paginate` here count distinct rows of the query's own model.
 - **Updating an active model with nothing assigned.** `update(on:)` sends no query and returns the row unchanged. rust-dbkit returns an error.
 - **Changing a key column on an active model.** The update filters by the key the row was loaded with, so assigning a primary key column moves the row to the new key. rust-dbkit never writes key columns and filters by the assigned key, so it reports the row as not found.
@@ -130,3 +131,15 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `ui/pass_relation_state_into_generic_names.rs` | Its relation names would clash with the generated conversion to fewer loaded relations, which is left out. |
 | `ui/pass_relation_state_into_shadowed_traits.rs` | Its types named `From` and `Into` would shadow the traits of the generated conversion to fewer loaded relations, which is left out. |
 | `subquery_sql.rs::exists_subquery_does_not_treat_dollar_digits_inside_quoted_identifier_as_bind_token` | rust-dbkit takes an alias as SQL text, which may be a quoted identifier, and rewrites a subquery's placeholders in that text. This port takes an alias as a name it quotes itself and renders a subquery's binds with the outer query's renderer, so no SQL text is scanned for placeholders. `existsSubqueryDoesNotTreatDollarSuffixInAliasAsBindToken` covers an alias with `$1`. |
+| `ui/fail_distinct_after_for_update.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_distinct_after_for_update_nowait.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_distinct_after_for_update_skip_locked.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_for_update_after_distinct.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_for_update_nowait_after_distinct.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_for_update_skip_locked_after_distinct.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_for_update_after_group_by.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_for_update_after_group_by_having.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_group_by_after_for_update.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_group_by_having_after_for_update.rs` | Rejecting `FOR UPDATE` with `DISTINCT` or `GROUP BY` at compile time is planned, see "Planned". |
+| `ui/fail_nowait_without_for_update.rs` | The waiting behaviour is the argument of `forUpdate(_:)`, as in `forUpdate(.noWait)`, so there is no `NOWAIT` without a lock. |
+| `ui/fail_skip_locked_without_for_update.rs` | The waiting behaviour is the argument of `forUpdate(_:)`, as in `forUpdate(.skipLocked)`, so there is no `SKIP LOCKED` without a lock. |

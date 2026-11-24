@@ -16,6 +16,19 @@ class SubscriptionExistsModel {
     var state: String
 }
 
+@Model(table: "account_exists_lock_groups")
+class AccountExistsLockGroupModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+}
+
+@Model(table: "account_exists_lock_rows")
+class AccountExistsLockRowModel {
+    @Key @AutoIncrement var id: Int64
+    var groupID: Int64
+    var state: String
+}
+
 @Suite struct IntegrationExistsSubqueryTests {
     @Test func whereExistsReturnsRowsWithMatchingChildren() async throws {
         try await withRollback { tx in
@@ -133,8 +146,40 @@ class SubscriptionExistsModel {
         }
     }
 
-    // Waits for slice 22: `whereExistsPreservesSkipLockedSubquerySemantics`, an `EXISTS` subquery with
-    // `forUpdate(.skipLocked)` that skips a row another connection locked.
+    /// rust-dbkit's tables are shared by its tests and tell their rows apart by a token; these are this test's own.
+    @Test func whereExistsPreservesSkipLockedSubquerySemantics() async throws {
+        try await withRealTable("account_exists_lock_groups", columns: "id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL") { db in
+            try await withRealTable(
+                "account_exists_lock_rows", columns: "id BIGSERIAL PRIMARY KEY, group_id BIGINT NOT NULL, state TEXT NOT NULL"
+            ) { _ in
+                let groupInsert = AccountExistsLockGroupModel.insert(AccountExistsLockGroupModel.Insert(name: "alpha"))
+                let group = try #require(try await groupInsert.returningAll().first(on: db))
+                let rowInsert = AccountExistsLockRowModel.insert(AccountExistsLockRowModel.Insert(groupID: group.id, state: "ready"))
+                let row = try #require(try await rowInsert.returningAll().first(on: db))
+                let readyGroups = AccountExistsLockGroupModel.query()
+                    .whereExists(
+                        AccountExistsLockRowModel.query()
+                            .forUpdate(.skipLocked)
+                            .select(AccountExistsLockRowModel.id)
+                            .filter(AccountExistsLockRowModel.groupID == AccountExistsLockGroupModel.id)
+                            .filter(AccountExistsLockRowModel.state == "ready")
+                    )
+
+                try await db.transaction { tx1 in
+                    let locked = try await AccountExistsLockRowModel.query()
+                        .filter(AccountExistsLockRowModel.id == row.id)
+                        .forUpdate()
+                        .first(on: tx1)
+                    #expect(locked != nil, "row should be locked by tx1")
+
+                    let names = try await db.transaction { tx2 in try await readyGroups.all(on: tx2).map(\.name) }
+                    #expect(names.isEmpty, "skip locked subquery should not match rows locked by another transaction")
+                }
+                // Without the other transaction's lock, the same query matches the row.
+                #expect(try await readyGroups.all(on: db).map(\.name) == ["alpha"])
+            }
+        }
+    }
 }
 
 /// The enabled `alerts` subscriptions of the account whose id is `accountID`, usually a column of the outer query.

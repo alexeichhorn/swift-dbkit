@@ -685,8 +685,13 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             }
             let notes = try await RolledBackNoteModel.query().all(on: db)
             #expect(notes.isEmpty)
-            // Waits for slice 24: `tx.setLocal("statement_timeout", "5s")`, read back with `SHOW statement_timeout`.
-            // Waits for slice 22: `UserModel.query().forUpdate(.skipLocked).all(on: tx)` in that transaction.
+
+            try await db.transaction { tx in
+                // Waits for slice 24: `tx.setLocal("statement_timeout", "5s")` before the lock, read back after it with
+                // `SHOW statement_timeout`.
+                let locked = try await RolledBackNoteModel.query().forUpdate(.skipLocked).all(on: tx)
+                #expect(locked.isEmpty)
+            }
         }
     }
 

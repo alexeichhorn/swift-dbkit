@@ -27,7 +27,7 @@ private func dynamicIntervalMath() {
         )
         .orderBy(WorkRunModel.attempts.asc)
         .orderBy(WorkRunModel.createdAt.asc)
+        .forUpdate(.skipLocked)
         .limit(1)
         .render()
-    // Waits for slice 22: `.forUpdate(.skipLocked)` on the query.
 }

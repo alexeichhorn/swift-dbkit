@@ -57,6 +57,11 @@ private func firstSQL<Row>(_ query: Query<Row>) async throws -> String {
         )
     }
 
-    // Waits for slice 22: `joinedForUpdateScopesLockToBaseTable`, `with(\.todos, .joined).forUpdate(.noWait)` locking
-    // `FOR UPDATE OF "users" NOWAIT`.
+    @Test func joinedForUpdateScopesLockToBaseTable() async throws {
+        let query: Query<UserModel.Loaded<[TodoModel]>> = UserModel.query().with(\.todos, .joined).forUpdate(.noWait)
+        #expect(
+            try await firstSQL(query)
+                == #"SELECT "users".*, "todos"."id" AS "todos.id", "todos"."user_id" AS "todos.user_id", "todos"."title" AS "todos.title", "todos"."note" AS "todos.note", "todos"."is_complete" AS "todos.is_complete" FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id" FOR UPDATE OF "users" NOWAIT"#
+        )
+    }
 }
