@@ -47,6 +47,17 @@ public enum RowLock: Sendable {
     case noWait
 }
 
+/// What a `SELECT` of model rows (one without `items`) selects.
+enum ModelColumns {
+    /// `"table".*`, the extra items and the columns of the eager-joined models, to read the rows.
+    case loaded
+    /// `"table".*` alone.
+    case table
+    /// With any join, the distinct key columns, so each row counts once however many joined rows match it; without
+    /// one, `"table".*`.
+    case distinctKeysWhenJoined([String])
+}
+
 /// A relation joined for eager loading, with the joined relations of its children.
 struct JoinedLoad: Sendable {
     let step: Int
@@ -82,19 +93,31 @@ final class SQLRenderer {
     }
 
     /// Renders a `SELECT`; `enclosing` is the scope of the statement a subquery is part of.
-    func renderSelect(_ statement: SelectStatement, eagerJoins: [JoinedLoad], enclosing: JoinScope? = nil) -> String {
+    func renderSelect(
+        _ statement: SelectStatement, eagerJoins: [JoinedLoad], enclosing: JoinScope? = nil, modelColumns: ModelColumns = .loaded
+    ) -> String {
         let scope = JoinScope(planning: statement, eagerJoins: eagerJoins, enclosing: enclosing)
         let base = scope.base
+        let plannedJoins = scope.orderedJoins()
 
         var columns: [String]
+        var distinct = statement.distinct
         if let items = statement.items {
             columns = items.map { renderItem($0, in: scope) }
         } else {
-            columns = ["\(quoted(base)).*"] + statement.extraItems.map { renderItem($0, in: scope) }
-            columns += eagerColumns(eagerJoins, path: [], prefix: "", in: scope)
+            switch modelColumns {
+            case .loaded:
+                columns = ["\(quoted(base)).*"] + statement.extraItems.map { renderItem($0, in: scope) }
+                columns += eagerColumns(eagerJoins, path: [], prefix: "", in: scope)
+            case .distinctKeysWhenJoined(let keys) where !plannedJoins.isEmpty:
+                columns = keys.map { "\(quoted(base)).\(quoted($0))" }
+                distinct = true
+            case .table, .distinctKeysWhenJoined:
+                columns = ["\(quoted(base)).*"]
+            }
         }
 
-        let joins = scope.orderedJoins().map { renderJoin($0, in: scope) }
+        let joins = plannedJoins.map { renderJoin($0, in: scope) }
 
         var clauses: [String] = []
         if !statement.filters.isEmpty {
@@ -125,8 +148,19 @@ final class SQLRenderer {
         }
 
         let from = statement.alias.map { "\(quoted(statement.table)) AS \(quoted($0))" } ?? quoted(statement.table)
-        let head = "SELECT \(statement.distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(from)"
+        let head = "SELECT \(distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(from)"
         return ([head] + joins + clauses).joined(separator: " ")
+    }
+
+    /// Renders the `SELECT` that `count` and `exists` wrap: `statement` without its ordering, pagination and lock, and
+    /// selecting `modelColumns` instead of the loaded columns. The eager joins stay, as filters may use them.
+    func renderCounted(_ statement: SelectStatement, eagerJoins: [JoinedLoad], modelColumns: ModelColumns) -> String {
+        var statement = statement
+        statement.orderBy = []
+        statement.limit = nil
+        statement.offset = nil
+        statement.lock = nil
+        return renderSelect(statement, eagerJoins: eagerJoins, modelColumns: modelColumns)
     }
 
     private func renderItem(_ item: SelectItem, in scope: JoinScope) -> String {

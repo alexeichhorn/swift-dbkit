@@ -65,6 +65,20 @@ public struct Query<Row: Model>: SelectQuery {
     public func first(on executor: some DatabaseExecutor) async throws -> Row? {
         try await limit(1).all(on: executor).first
     }
+
+    /// Fetches one page; `page` is 1-based. Order the query for stable pages. `total` counts each row once, but with a
+    /// joined to-many load the page's limit applies to joined rows, so use `.selectIn`.
+    public func paginate(page: Int, perPage: Int, on executor: some DatabaseExecutor) async throws -> Page<Row> {
+        precondition(page >= 1 && perPage >= 1, "page and perPage must be positive")
+        let total = try await count(on: executor)
+        let items = try await limit(perPage).offset((page - 1) * perPage).all(on: executor)
+        return Page(items: items, page: page, perPage: perPage, total: total)
+    }
+}
+
+extension Query: ModelRowsQuery {
+    var eagerJoins: [JoinedLoad] { plan.joins }
+    var keyColumns: [String] { Row.Base.schema.primaryKey }
 }
 
 extension Query where Row == Row.Base {

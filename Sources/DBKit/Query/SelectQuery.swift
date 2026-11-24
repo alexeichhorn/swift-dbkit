@@ -61,4 +61,45 @@ extension SelectQuery {
         change(&copy.statement)
         return copy
     }
+
+    /// The number of rows the query returns, ignoring its ordering, limit, offset and lock. A model query counts each
+    /// of its rows once, however many rows its joins match.
+    public func count(on executor: some DatabaseExecutor) async throws -> Int {
+        try await scalar("SELECT COUNT(*) FROM", "AS \"count\"", countsKeys: true, as: Int64.self, on: executor).map(Int.init) ?? 0
+    }
+
+    /// Whether the query returns any row, ignoring its ordering, limit, offset and lock.
+    public func exists(on executor: some DatabaseExecutor) async throws -> Bool {
+        try await scalar("SELECT EXISTS", "", countsKeys: false, as: Bool.self, on: executor) ?? false
+    }
+
+    private func scalar<T: SQLValue>(
+        _ prefix: String, _ suffix: String, countsKeys: Bool, as type: T.Type, on executor: some DatabaseExecutor
+    ) async throws -> T? {
+        let renderer = SQLRenderer()
+        // A cast rather than a `Query` overload, so a count through `some SelectQuery` keeps the eager joins too.
+        let model = self as? any ModelRowsQuery
+        let columns: ModelColumns = if countsKeys, let model { .distinctKeysWhenJoined(model.keyColumns) } else { .table }
+        let inner = renderer.renderCounted(statement, eagerJoins: model?.eagerJoins ?? [], modelColumns: columns)
+        let sql = "\(prefix) (\(inner))" + (suffix.isEmpty ? "" : " \(suffix)")
+        return try await executor.rows(RenderedSQL(sql: sql, binds: renderer.binds)) { try $0[0].decode(T.self) }.first
+    }
+}
+
+/// A query of models, whose `count` and `exists` keep the joins of its eager loads and whose `count` needs its keys.
+protocol ModelRowsQuery {
+    var eagerJoins: [JoinedLoad] { get }
+    var keyColumns: [String] { get }
+}
+
+/// One page of results from `paginate`.
+public struct Page<Item: Sendable>: Sendable {
+    public let items: [Item]
+    /// The 1-based page number.
+    public let page: Int
+    public let perPage: Int
+    /// The number of rows across all pages.
+    public let total: Int
+
+    public var totalPages: Int { perPage > 0 ? (total + perPage - 1) / perPage : 0 }
 }
