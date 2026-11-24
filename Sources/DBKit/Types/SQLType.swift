@@ -4,6 +4,9 @@ import PostgresNIO
 public protocol SQLType: Sendable {
     associatedtype NonNull: SQLValue
 
+    /// The value as a bind parameter, or `NULL`.
+    var sqlNode: SQLNode { get }
+
     static func decode(from cell: PostgresCell) throws -> Self
 }
 
@@ -20,6 +23,8 @@ extension SQLValue {
 
 extension Optional: SQLType where Wrapped: SQLValue {
     public typealias NonNull = Wrapped
+
+    public var sqlNode: SQLNode { map(\.sqlNode) ?? .null }
 
     public static func decode(from cell: PostgresCell) throws -> Self {
         cell.bytes == nil ? nil : try Wrapped.decode(from: cell)

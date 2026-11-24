@@ -12,10 +12,11 @@ struct ModelDescription {
         let storage: String
         let isOptional: Bool
         let isKey: Bool
-        /// The Swift default from `var x: T = value`, used by the initializer.
+        let isAutoIncrement: Bool
+        /// The Swift default from `var x: T = value`, used by the initializers and `Insert`.
         let defaultValue: String?
 
-        /// The default parameter value in the initializer.
+        /// The default parameter value in the initializers.
         var parameterDefault: String? { defaultValue ?? (isOptional ? "nil" : nil) }
     }
 
@@ -68,6 +69,11 @@ struct ModelDescription {
             let columnName = attributes.first { attributeName($0) == "ColumnName" }
                 .flatMap { $0.arguments?.as(LabeledExprListSyntax.self)?.first.flatMap { stringLiteral($0.expression) } }
             let type = typeAnnotation.type.trimmedDescription
+            let isAutoIncrement = attributes.contains { attributeName($0) == "AutoIncrement" }
+            if isAutoIncrement, binding.initializer != nil {
+                throw MacroExpansionErrorMessage(
+                    "@AutoIncrement column '\(name)' can't have a Swift default; the database assigns the value")
+            }
             fields.append(
                 Field(
                     name: name,
@@ -76,6 +82,7 @@ struct ModelDescription {
                     storage: storageName(of: identifier.identifier),
                     isOptional: typeAnnotation.type.is(OptionalTypeSyntax.self) || type.hasPrefix("Optional<"),
                     isKey: attributes.contains { attributeName($0) == "Key" },
+                    isAutoIncrement: isAutoIncrement,
                     defaultValue: binding.initializer?.value.trimmedDescription
                 )
             )

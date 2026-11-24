@@ -30,6 +30,14 @@ extension DatabaseExecutor {
         return values
     }
 
+    /// Runs an `INSERT`/`UPDATE`/`DELETE` and returns the number of affected rows. PostgresNIO doesn't expose
+    /// the command tag, so the statement is wrapped in a counting CTE.
+    func execute(_ rendered: RenderedSQL) async throws -> Int {
+        let counting = RenderedSQL(
+            sql: "WITH \"affected\" AS (\(rendered.sql) RETURNING 1) SELECT COUNT(*) FROM \"affected\"", binds: rendered.binds)
+        return Int(try await rows(counting) { try $0[0].decode(Int64.self) }.first ?? 0)
+    }
+
     func postgresQuery(_ rendered: RenderedSQL) throws -> PostgresQuery {
         var bindings = PostgresBindings(capacity: rendered.binds.count)
         for bind in rendered.binds {

@@ -2,6 +2,7 @@
 public indirect enum SQLNode: Sendable {
     case column(ColumnReference)
     case bind(Bind)
+    case null
     /// SQL text emitted verbatim. Only ever built from DBKit's fixed keywords and identifiers.
     case raw(String)
     case sequence([SQLNode])

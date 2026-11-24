@@ -1,8 +1,8 @@
-/// Generates the ``Model`` conformance: static typed columns, a memberwise initializer, row decoding and, for a single
-/// primary key, `find(_:on:)`.
+/// Generates the ``Model`` conformance: static typed columns, a memberwise initializer, the `Insert` type, row decoding
+/// and, for a single primary key, `find(_:on:)`.
 ///
 /// Models are classes, so a row with loaded relations can be passed wherever the plain model is expected. Columns are
-/// `var`s that `@Model` makes read-only; a Swift default (`var isComplete = false`) becomes the initializer's default.
+/// `var`s that `@Model` makes read-only; a Swift default (`var isComplete = false`) becomes the default in `Insert`.
 /// Property names starting with `__dbkit_` are reserved for the generated code.
 ///
 /// Column names default to the snake_case property name (`userID` → `user_id`); override with ``ColumnName(_:)``.
@@ -19,7 +19,7 @@
 /// ```
 @attached(member, names: arbitrary)
 @attached(memberAttribute)
-@attached(extension, conformances: Model, Sendable, names: named(Base), named(schema), named(decodeBase))
+@attached(extension, conformances: Model, Sendable, names: named(Base), named(schema), named(decodeBase), named(columnValues))
 public macro Model(table: String? = nil) = #externalMacro(module: "DBKitMacros", type: "ModelMacro")
 
 /// Makes a column read-only. `@Model` adds it to every column; not meant to be written by hand.
@@ -30,7 +30,7 @@ public macro _Column() = #externalMacro(module: "DBKitMacros", type: "ColumnMacr
 @attached(peer)
 public macro Key() = #externalMacro(module: "DBKitMacros", type: "MarkerMacro")
 
-/// Marks a column whose value the database generates on insert.
+/// Marks a column whose value the database generates on insert; it's left out of the `Insert` type.
 @attached(peer)
 public macro AutoIncrement() = #externalMacro(module: "DBKitMacros", type: "MarkerMacro")
 

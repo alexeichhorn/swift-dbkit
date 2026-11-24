@@ -2,8 +2,8 @@ import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// Expands `@Model`. Members (column storage, the initializer, the columns and `find`) go into the class, columns
-/// become read-only, and the `Model` conformance goes into an extension.
+/// Expands `@Model`. Members (column storage, the initializer, the columns, `Insert` and `find`) go into the class,
+/// columns become read-only, and the `Model` conformance goes into an extension.
 public struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -17,7 +17,7 @@ public struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             context.diagnose(Diagnostic(node: name, message: MacroExpansionErrorMessage(message)))
         }
         let generator = Generator(model: model)
-        let members = generator.storage() + [generator.memberwiseInit()] + generator.columns() + generator.find()
+        let members = generator.storage() + [generator.memberwiseInit()] + generator.columns() + [generator.insertType()] + generator.find()
         return members.map { DeclSyntax(stringLiteral: $0) }
     }
 
@@ -99,6 +99,23 @@ private struct Generator {
         }
     }
 
+    func insertType() -> String {
+        let fields = model.fields.filter { !$0.isAutoIncrement }
+        return """
+            \(access)struct Insert: DBKit.ModelInsert {
+                \(fields.map { "\(access)var \($0.name): \($0.type)" }.joined(separator: "\n"))
+
+                \(access)init(\(fields.map { parameter($0) }.joined(separator: ", "))) {
+                    \(fields.map { "self.\($0.name) = \($0.name)" }.joined(separator: "\n"))
+                }
+
+                \(access)var columnValues: [DBKit.ColumnValue] {
+                    [\(fields.map { "DBKit.ColumnValue(\"\($0.column)\", \($0.name))" }.joined(separator: ", "))]
+                }
+            }
+            """
+    }
+
     func find() -> [String] {
         guard model.keys.count == 1, let key = model.keys.first else { return [] }
         return [
@@ -113,6 +130,7 @@ private struct Generator {
 
     func conformance(for type: String) -> String {
         let decodeArguments = model.fields.map { "\($0.name): try row.decode((\($0.type)).self, \"\($0.column)\")" }
+        let columnValues = model.fields.map { "DBKit.ColumnValue(\"\($0.column)\", \($0.name))" }
         return """
             extension \(type): DBKit.Model, @unchecked Sendable {
                 \(access)typealias Base = \(name)
@@ -127,6 +145,10 @@ private struct Generator {
 
                 \(access)static func decodeBase(from row: DBKit.RowReader) throws -> \(name) {
                     \(name)(\(decodeArguments.joined(separator: ", ")))
+                }
+
+                \(access)var columnValues: [DBKit.ColumnValue] {
+                    [\(columnValues.joined(separator: ", "))]
                 }
             }
             """

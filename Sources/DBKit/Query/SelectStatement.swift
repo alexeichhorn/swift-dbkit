@@ -23,6 +23,8 @@ final class SQLRenderer {
         case .bind(let bind):
             binds.append(bind)
             return "$\(binds.count)"
+        case .null:
+            return "NULL"
         case .raw(let sql):
             return sql
         case .sequence(let nodes):
