@@ -4,10 +4,12 @@ import SwiftSyntaxMacros
 
 @main
 struct DBKitMacrosPlugin: CompilerPlugin {
-    let providingMacros: [any Macro.Type] = [ModelMacro.self, MarkerMacro.self, ColumnMacro.self, ProjectionMacro.self]
+    let providingMacros: [any Macro.Type] = [
+        ModelMacro.self, MarkerMacro.self, RelationMacro.self, ColumnMacro.self, ExtensionCodeMacro.self, ProjectionMacro.self,
+    ]
 }
 
-/// Field markers like `@Key` generate nothing themselves; `@Model` reads them.
+/// Field markers like `@Key` and `@BelongsTo` generate nothing themselves; `@Model` reads them.
 public struct MarkerMacro: PeerMacro {
     public static func expansion(
         of node: AttributeSyntax,

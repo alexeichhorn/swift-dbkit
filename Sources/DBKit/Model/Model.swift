@@ -2,11 +2,14 @@ import PostgresNIO
 
 /// A table-backed model. Conform with `@Model`, which generates every requirement.
 ///
-/// `Base` is the model class itself, the plain row that queries return.
+/// `Base` is the model class itself, the plain row that queries return before eager loading. Rows with loaded
+/// relations are instances of its generated `Loaded` subclass, so they share `Base`.
 public protocol Model: Sendable {
     associatedtype Base: Model where Base.Base == Base
     /// The values needed to insert a row: every column except auto-increment keys.
     associatedtype Insert: ModelInsert
+    /// The model's relations as static properties, for `.with(\.relation)`.
+    associatedtype Relations = NoRelations
 
     static var schema: Schema { get }
     static func decodeBase(from row: RowReader) throws -> Base
@@ -18,6 +21,9 @@ public protocol Model: Sendable {
     /// Every column with its current value, in schema order.
     var columnValues: [ColumnValue] { get }
 }
+
+/// The `Relations` of a model without relations.
+public enum NoRelations {}
 
 /// Generated `Model.Insert` types.
 public protocol ModelInsert: Sendable {

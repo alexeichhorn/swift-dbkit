@@ -16,6 +16,8 @@ public protocol SQLType: Sendable {
 
     /// The value as a bind parameter, or `NULL`.
     var sqlNode: SQLNode { get }
+    /// The value, or `nil` for SQL NULL.
+    var nonNull: NonNull? { get }
 
     static func decode(from cell: PostgresCell) throws -> Self
 }
@@ -32,6 +34,7 @@ where
 
 extension SQLValue {
     public var sqlNode: SQLNode { .bind(Bind(self)) }
+    public var nonNull: Self? { self }
 
     public static func decode(from cell: PostgresCell) throws -> Self {
         try cell.decode(Self.self)
@@ -48,6 +51,7 @@ extension Optional: SQLType where Wrapped: SQLValue {
     public typealias AsInterval = Interval?
 
     public var sqlNode: SQLNode { map(\.sqlNode) ?? .null }
+    public var nonNull: Wrapped? { self }
 
     public static func decode(from cell: PostgresCell) throws -> Self {
         cell.bytes == nil ? nil : try Wrapped.decode(from: cell)

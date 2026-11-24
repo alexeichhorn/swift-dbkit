@@ -1,9 +1,12 @@
-/// The untyped parts of a `SELECT`.
+/// The untyped parts of a `SELECT`, shared by model queries and projections.
 public struct SelectStatement: Sendable {
     var table: String
     /// Projected expressions; `nil` selects `"table".*`.
     var items: [SelectItem]?
+    /// Expressions selected after `"table".*`, e.g. the parent key of a many-to-many load.
+    var extraItems: [SelectItem] = []
     var distinct = false
+    var joins: [JoinClause] = []
     var filters: [SQLNode] = []
     var groupBy: [SQLNode] = []
     var having: [SQLNode] = []
@@ -19,6 +22,14 @@ public struct SelectStatement: Sendable {
 struct SelectItem: Sendable {
     let node: SQLNode
     let alias: String?
+}
+
+enum JoinKind: String, Sendable {
+    case inner = "JOIN"
+}
+
+enum JoinClause: Sendable {
+    case table(String, on: SQLNode, JoinKind)
 }
 
 /// Renders statements to SQL, numbering bind placeholders.
@@ -42,7 +53,14 @@ final class SQLRenderer {
     }
 
     func renderSelect(_ statement: SelectStatement) -> String {
-        let columns = statement.items?.map { renderItem($0) } ?? ["\(quoted(statement.table)).*"]
+        let joins = statement.joins.map { join in
+            switch join {
+            case .table(let table, let condition, let kind): "\(kind.rawValue) \(quoted(table)) ON \(render(condition))"
+            }
+        }
+
+        let columns =
+            statement.items?.map { renderItem($0) } ?? (["\(quoted(statement.table)).*"] + statement.extraItems.map { renderItem($0) })
 
         var clauses: [String] = []
         if !statement.filters.isEmpty {
@@ -62,7 +80,7 @@ final class SQLRenderer {
         if let offset = statement.offset { clauses.append("OFFSET \(offset)") }
 
         let head = "SELECT \(statement.distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(quoted(statement.table))"
-        return ([head] + clauses).joined(separator: " ")
+        return ([head] + joins + clauses).joined(separator: " ")
     }
 
     private func renderItem(_ item: SelectItem) -> String {
