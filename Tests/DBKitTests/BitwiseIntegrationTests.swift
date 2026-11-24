@@ -15,8 +15,8 @@ class BitwiseSampleModel {
 
 private typealias Sample = BitwiseSampleModel
 
-/// rust-dbkit selects the results as projections. Until projections exist, filters compare them with the expected
-/// values, so a row comes back only when PostgreSQL computes every one of them.
+/// rust-dbkit selects the results as projections. Filters also compare them with the expected values, so a row comes
+/// back only when PostgreSQL computes every one of them.
 @Suite struct BitwiseIntegrationTests {
     @Test func allScalarOperatorsRoundtrip() async throws {
         try await withRollback { tx in
@@ -38,8 +38,19 @@ private typealias Sample = BitwiseSampleModel
                 .filter(shiftedRight == 0b0101)
                 .all(on: tx)
             #expect(rows.map(\.id) == [sample.id])
-            // Waits for slice 14: the six expressions as the projections `and_value`, `or_value`, `xor_value`,
-            // `inverted`, `shifted_left` and `shifted_right`, decoded as `Int32`.
+
+            // A tuple stands in for rust-dbkit's `OperatorProjection`.
+            let projected = try #require(
+                try await Sample.query()
+                    .select(andValue, orValue, xorValue, inverted, shiftedLeft, shiftedRight)
+                    .filter(Sample.id == sample.id)
+                    .first(on: tx))
+            #expect(projected.0 == 0b1000)
+            #expect(projected.1 == 0b1111)
+            #expect(projected.2 == 0b0101)
+            #expect(projected.3 == ~Int32(0b1010))
+            #expect(projected.4 == 0b10_1000)
+            #expect(projected.5 == 0b0101)
         }
     }
 
@@ -64,8 +75,26 @@ private typealias Sample = BitwiseSampleModel
             #expect(updated.map(\.mediumValue) == [0b1000])
             #expect(updated.map(\.largeValue) == [0b1_1011])
             #expect(updated.map(\.nullableLarge) == [0b1_1101])
-            // Waits for slice 14: the three expressions as the projections `small_and_medium`, `medium_or_large` and
-            // `large_xor_small`, decoded as `Int32`, `Int64` and `Int64`.
+
+            // A `@Projection` stands in for rust-dbkit's `MixedWidthProjection`. The update above changed the row, so
+            // this projects a second one with the same values.
+            @Projection struct MixedWidthProjection {
+                let smallAndMedium: Int32
+                let mediumOrLarge: Int64
+                let largeXorSmall: Int64
+            }
+            let unchanged = try await seedSample(on: tx, small: 0b1100, medium: 0b1010, large: 0b1_0001)
+            let projected = try #require(
+                try await Sample.query()
+                    .select(
+                        MixedWidthProjection.columns(
+                            smallAndMedium: smallAndMedium, mediumOrLarge: mediumOrLarge, largeXorSmall: largeXorSmall)
+                    )
+                    .filter(Sample.id == unchanged.id)
+                    .first(on: tx))
+            #expect(projected.smallAndMedium == 0b1000)
+            #expect(projected.mediumOrLarge == 0b1_1011)
+            #expect(projected.largeXorSmall == 0b1_1101)
         }
     }
 
@@ -92,8 +121,25 @@ private typealias Sample = BitwiseSampleModel
                 .filter(unchangedByZeroShift == -8)
                 .all(on: tx)
             #expect(rows.map(\.id) == [sample.id])
-            // Waits for slice 14: the seven expressions as the projections `zero_and`, `zero_or`, `all_bits`,
-            // `literal_all_bits`, `sign_bit`, `signed_right_shift` and `unchanged_by_zero_shift`.
+
+            let projected = try #require(
+                try await Sample.query()
+                    .select(
+                        zeroAnd.as("zero_and"),
+                        zeroOr.as("zero_or"),
+                        allBits.as("all_bits"),
+                        literalAllBits.as("literal_all_bits"),
+                        signBit.as("sign_bit"),
+                        signedRightShift.as("signed_right_shift"),
+                        unchangedByZeroShift.as("unchanged_by_zero_shift")
+                    )
+                    .filter(Sample.id == sample.id)
+                    .first(as: EdgeProjection.self, on: tx))
+            #expect(
+                projected
+                    == EdgeProjection(
+                        zeroAnd: 0, zeroOr: -8, allBits: -8, literalAllBits: -8, signBit: Int64.min, signedRightShift: -2,
+                        unchangedByZeroShift: -8))
         }
     }
 
@@ -129,8 +175,26 @@ private typealias Sample = BitwiseSampleModel
                 .filter(shiftedByNullable.isNull)
                 .all(on: tx)
             #expect(nulls.map(\.id) == [empty.id])
-            // Waits for slice 14: the six expressions as the projections `and_value`, `or_value`, `xor_value`,
-            // `inverted`, `shifted_by_required` and `shifted_by_nullable` of both rows, ordered by `id`.
+
+            // Aliased expressions decode as a tuple too; rust-dbkit decodes them into its `NullableProjection`.
+            let projected = try await Sample.query()
+                .select(
+                    andValue.as("and_value"),
+                    orValue.as("or_value"),
+                    xorValue.as("xor_value"),
+                    inverted.as("inverted"),
+                    shiftedByRequired.as("shifted_by_required"),
+                    shiftedByNullable.as("shifted_by_nullable")
+                )
+                .orderBy(Sample.id.asc)
+                .all(on: tx)
+            #expect(projected.count == 2)
+            #expect(projected.map(\.0) == [0b1000, nil])
+            #expect(projected.map(\.1) == [0b1110, nil])
+            #expect(projected.map(\.2) == [0b0110, nil])
+            #expect(projected.map(\.3) == [~Int64(0b1100), nil])
+            #expect(projected.map(\.4) == [0b11_0000, nil])
+            #expect(projected.map(\.5) == [0b0101, nil])
         }
     }
 
@@ -148,6 +212,17 @@ private typealias Sample = BitwiseSampleModel
             #expect(!rows.contains { $0.id == first.id })
         }
     }
+}
+
+/// rust-dbkit's `EdgeProjection`, decoded by alias.
+private struct EdgeProjection: Decodable, Equatable {
+    let zeroAnd: Int64
+    let zeroOr: Int64
+    let allBits: Int64
+    let literalAllBits: Int64
+    let signBit: Int64
+    let signedRightShift: Int64
+    let unchangedByZeroShift: Int64
 }
 
 private func setupSchema(on tx: Transaction) async throws {

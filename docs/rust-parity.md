@@ -101,3 +101,4 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `ui/pass_bitwise_custom_integer_types.rs` | Custom integer-backed types in bitwise expressions are left out. |
 | `ui/fail_interval_float_hours.rs` | `SQL.interval(hours:)` takes fractions, see "Interval units" under "Different On Purpose". |
 | `sql_compiler.rs::condition_preserves_required_predicate_type` | A condition's predicate is always `Bool?`, see "A condition's predicate" under "Different On Purpose". |
+| `sql_compiler.rs::compiles_order_by_alias` | Ordering by a select alias is planned, see "Planned". |

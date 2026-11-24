@@ -568,17 +568,101 @@ import Testing
         }
     }
 
+    /// Rows decode into a `Decodable` struct by alias; rust-dbkit selects `note` without an alias, which `select` can't
+    /// mix with aliased expressions, so it is aliased `note`.
+    @Test func nullableValueComparisonProjectionsFollowPostgresThreeValuedLogic() async throws {
+        struct ComparisonRow: Decodable {
+            let note: String?
+            let equalsDirect: Bool?
+            let equalsOptional: Bool?
+            let equalsNull: Bool?
+            let differsDirect: Bool?
+            let differsNull: Bool?
+            let less: Bool?
+            let lessOrEqual: Bool?
+            let greater: Bool?
+            let greaterOrEqual: Bool?
+            let between: Bool?
+            let matches: Bool?
+            let matchesCaseInsensitively: Bool?
+            let listed: Bool?
+            let optionalList: Bool?
+            let emptyList: Bool?
+            let isNull: Bool
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            for note in [nil, "alpha", "middle", "zulu"] {
+                _ = try await seedNullableRow(on: tx, note: note)
+            }
+
+            let middle: String? = "middle"
+            let rows = try await NullableRowModel.query()
+                .select(
+                    NullableRowModel.note.as("note"),
+                    (NullableRowModel.note == "middle").as("equals_direct"),
+                    (NullableRowModel.note == middle).as("equals_optional"),
+                    (NullableRowModel.note == nil).as("equals_null"),
+                    (NullableRowModel.note != "middle").as("differs_direct"),
+                    (NullableRowModel.note != nil).as("differs_null"),
+                    (NullableRowModel.note < "middle").as("less"),
+                    (NullableRowModel.note <= "middle").as("less_or_equal"),
+                    (NullableRowModel.note > "middle").as("greater"),
+                    (NullableRowModel.note >= "middle").as("greater_or_equal"),
+                    NullableRowModel.note.between("b", "y").as("between"),
+                    NullableRowModel.note.like("m%").as("matches"),
+                    NullableRowModel.note.ilike("M%").as("matches_case_insensitively"),
+                    NullableRowModel.note.in(["alpha", "middle"]).as("listed"),
+                    NullableRowModel.note.in(["alpha", nil]).as("optional_list"),
+                    NullableRowModel.note.in([]).as("empty_list"),
+                    NullableRowModel.note.isNull.as("is_null")
+                )
+                .orderBy(NullableRowModel.id.asc)
+                .all(as: ComparisonRow.self, on: tx)
+
+            #expect(rows.map(\.note) == [nil, "alpha", "middle", "zulu"])
+            #expect(rows.map(\.equalsDirect) == [nil, false, true, false])
+            #expect(rows.map(\.equalsOptional) == [nil, false, true, false])
+            #expect(rows.map(\.equalsNull) == [true, false, false, false])
+            #expect(rows.map(\.differsDirect) == [nil, true, false, true])
+            #expect(rows.map(\.differsNull) == [false, true, true, true])
+
+            #expect(rows.map(\.less) == [nil, true, false, false])
+            #expect(rows.map(\.lessOrEqual) == [nil, true, true, false])
+            #expect(rows.map(\.greater) == [nil, false, false, true])
+            #expect(rows.map(\.greaterOrEqual) == [nil, false, true, true])
+            #expect(rows.map(\.between) == [nil, false, true, false])
+
+            #expect(rows.map(\.matches) == [nil, false, true, false])
+            #expect(rows.map(\.matchesCaseInsensitively) == [nil, false, true, false])
+            #expect(rows.map(\.listed) == [nil, true, true, false])
+            #expect(rows.map(\.optionalList) == [nil, true, nil, nil])
+            #expect(rows.map(\.emptyList) == [false, false, false, false])
+            #expect(rows.map(\.isNull) == [true, false, false, false])
+
+            let matching = try await NullableRowModel.query().filter(NullableRowModel.note == "middle").all(on: tx)
+            #expect(matching.map(\.note) == ["middle"])
+        }
+    }
+
     /// The row `(null.id, NULL)` compares as NULL, never as a match.
     @Test func nullableRowValueInFollowsPostgresThreeValuedLogic() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
             let null = try await seedNullableRow(on: tx, note: nil)
             let alpha = try await seedNullableRow(on: tx, note: "alpha")
-            _ = try await seedNullableRow(on: tx, note: "beta")
+            let beta = try await seedNullableRow(on: tx, note: "beta")
 
             let alphaNote: String? = "alpha"
             let listed: Expr<Bool?> = SQL.row(NullableRowModel.id, NullableRowModel.note).in([(alpha.id, alphaNote), (null.id, nil)])
-            // Waits for slice 14: `listed` as the projection `listed`, NULL for the NULL row, true for alpha, false for beta.
+            // rust-dbkit decodes the projection into a struct; here it is a tuple.
+            let rows: [(Int64, Bool?)] = try await NullableRowModel.query()
+                .select(NullableRowModel.id, listed)
+                .orderBy(NullableRowModel.id.asc)
+                .all(on: tx)
+            #expect(rows.map(\.0) == [null.id, alpha.id, beta.id])
+            #expect(rows.map(\.1) == [nil, true, false])
 
             let filtered = try await NullableRowModel.query().filter(listed).all(on: tx)
             #expect(filtered.map(\.id) == [alpha.id])
@@ -591,8 +675,48 @@ import Testing
             for note in [nil, "alpha", "middle", "zulu"] {
                 _ = try await seedNullableRow(on: tx, note: note)
             }
-            // Waits for slice 14: the projections `single_nullable`, `all_with_true`, `all_with_false`, `any_with_false`,
-            // `any_with_true` and `required_only`, each a condition's predicate, NULL where PostgreSQL's logic gives NULL.
+
+            func predicate(_ condition: Condition, _ build: (inout Condition) -> Void) throws -> Expr<Bool?> {
+                var condition = condition
+                build(&condition)
+                return try #require(condition.predicate)
+            }
+            let singleNullable = try predicate(.all) { $0.add(NullableRowModel.note == "middle") }
+            let allWithTrue = try predicate(.all) {
+                $0.add(NullableRowModel.note == "middle")
+                $0.add(NullableRowModel.id > 0)
+            }
+            let allWithFalse = try predicate(.all) {
+                $0.add(NullableRowModel.note == "middle")
+                $0.add(NullableRowModel.id < 0)
+            }
+            let anyWithFalse = try predicate(.any) {
+                $0.add(NullableRowModel.id < 0)
+                $0.add(NullableRowModel.note == "middle")
+            }
+            let anyWithTrue = try predicate(.any) {
+                $0.add(NullableRowModel.id > 0)
+                $0.add(NullableRowModel.note == "middle")
+            }
+            let requiredOnly = try predicate(.all) {
+                $0.add(NullableRowModel.id > 0)
+                $0.add(NullableRowModel.note.isNotNull)
+            }
+            // rust-dbkit decodes the projection into a struct; here it is a tuple. A predicate is always `Bool?` here,
+            // see "A condition's predicate" in `docs/rust-parity.md`, so `required_only` decodes as `Bool?` where
+            // rust-dbkit decodes `bool`.
+            let rows: [(String?, Bool?, Bool?, Bool?, Bool?, Bool?, Bool?)] = try await NullableRowModel.query()
+                .select(NullableRowModel.note, singleNullable, allWithTrue, allWithFalse, anyWithFalse, anyWithTrue, requiredOnly)
+                .orderBy(NullableRowModel.id.asc)
+                .all(on: tx)
+
+            #expect(rows.map(\.0) == [nil, "alpha", "middle", "zulu"])
+            #expect(rows.map(\.1) == [nil, false, true, false])  // single_nullable
+            #expect(rows.map(\.2) == [nil, false, true, false])  // all_with_true
+            #expect(rows.map(\.3) == [false, false, false, false])  // all_with_false
+            #expect(rows.map(\.4) == [nil, false, true, false])  // any_with_false
+            #expect(rows.map(\.5) == [true, true, true, true])  // any_with_true
+            #expect(rows.map(\.6) == [false, true, true, true])  // required_only
 
             var condition = Condition.all
             condition.add(NullableRowModel.note == "middle")

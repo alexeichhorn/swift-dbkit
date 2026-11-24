@@ -12,6 +12,19 @@ class JobColCompareModel {
     var maxRetries: Int64
 }
 
+/// Decoded by alias, the snake_case form of each property name.
+private struct NullableComparisonProjection: Decodable, Equatable {
+    let caseName: String
+    let equal: Bool?
+    let notEqual: Bool?
+    let less: Bool?
+    let lessOrEqual: Bool?
+    let greater: Bool?
+    let greaterOrEqual: Bool?
+    let distinct: Bool
+    let notDistinct: Bool
+}
+
 @Suite struct IntegrationColumnCompareAPITests {
     @Test func neColFiltersChangedHashRows() async throws {
         try await withRollback { tx in
@@ -78,10 +91,44 @@ class JobColCompareModel {
             ])
             .execute(on: tx)
 
-            // Waits for slice 14: the projection of `lastContentHash` as `case_name` and of `==`, `!=`, `<`, `<=`, `>`, `>=`
-            // (as `Bool?`), `isDistinct(from:)` and `isNotDistinct(from:)` (as `Bool`) between `embeddingHash` and
-            // `embedding`, ordered by `id`: `nil` for every operator in the three NULL rows; the distinct checks true for
-            // less, greater, left_null and right_null.
+            let hash = JobColCompareModel.embeddingHash
+            let embedding = JobColCompareModel.embedding
+            let rows = try await JobColCompareModel.query()
+                .select(
+                    JobColCompareModel.lastContentHash.as("case_name"),
+                    (hash == embedding).as("equal"),
+                    (hash != embedding).as("not_equal"),
+                    (hash < embedding).as("less"),
+                    (hash <= embedding).as("less_or_equal"),
+                    (hash > embedding).as("greater"),
+                    (hash >= embedding).as("greater_or_equal"),
+                    hash.isDistinct(from: embedding).as("distinct"),
+                    hash.isNotDistinct(from: embedding).as("not_distinct")
+                )
+                .orderBy(JobColCompareModel.id.asc)
+                .all(as: NullableComparisonProjection.self, on: tx)
+
+            #expect(
+                rows == [
+                    NullableComparisonProjection(
+                        caseName: "equal", equal: true, notEqual: false, less: false, lessOrEqual: true, greater: false,
+                        greaterOrEqual: true, distinct: false, notDistinct: true),
+                    NullableComparisonProjection(
+                        caseName: "less", equal: false, notEqual: true, less: true, lessOrEqual: true, greater: false,
+                        greaterOrEqual: false, distinct: true, notDistinct: false),
+                    NullableComparisonProjection(
+                        caseName: "greater", equal: false, notEqual: true, less: false, lessOrEqual: false, greater: true,
+                        greaterOrEqual: true, distinct: true, notDistinct: false),
+                    NullableComparisonProjection(
+                        caseName: "left_null", equal: nil, notEqual: nil, less: nil, lessOrEqual: nil, greater: nil,
+                        greaterOrEqual: nil, distinct: true, notDistinct: false),
+                    NullableComparisonProjection(
+                        caseName: "right_null", equal: nil, notEqual: nil, less: nil, lessOrEqual: nil, greater: nil,
+                        greaterOrEqual: nil, distinct: true, notDistinct: false),
+                    NullableComparisonProjection(
+                        caseName: "both_null", equal: nil, notEqual: nil, less: nil, lessOrEqual: nil, greater: nil,
+                        greaterOrEqual: nil, distinct: false, notDistinct: true),
+                ])
 
             let equalRows = try await JobColCompareModel.query()
                 .filter(JobColCompareModel.embeddingHash == JobColCompareModel.embedding)

@@ -32,5 +32,11 @@ private func arithmeticFiltersAndOrders() {
         .orderBy((ArithmeticRecordModel.occurredAt - SQL.interval(hours: ArithmeticRecordModel.leftValue)).asc)
         .limit(25)
         .render()
-    // Waits for slice 14: the projections `baselineValue + leftValue` and `leftUnits + rightUnits`.
+
+    let projection: Projection<Int32, Int16> = ArithmeticRecordModel.query()
+        .select(
+            (ArithmeticRecordModel.baselineValue + ArithmeticRecordModel.leftValue).as("computed_value"),
+            (ArithmeticRecordModel.leftUnits + ArithmeticRecordModel.rightUnits).as("total_units")
+        )
+    _ = projection.render()
 }

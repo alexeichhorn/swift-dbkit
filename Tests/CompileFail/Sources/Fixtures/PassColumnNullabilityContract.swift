@@ -205,7 +205,7 @@ private func logicIsNullableWhenAnOperandIs() {
     nullComparison.add(NullabilityRowModel.nullableText == nil)
     _ = NullabilityRowModel.query().filter(requiredOnly).filter(nullComparison)
 
-    // Waits for slice 14: `having(nullable)` and `SQL.count(NullabilityRowModel.id).filter(nullable)`.
+    // Waits for slice 14b: `having(nullable)` and `SQL.count(NullabilityRowModel.id).filter(nullable)`.
     // Waits for slice 18: `join(_:on: nullable)` and `leftJoin(_:on: nullable)`.
 }
 

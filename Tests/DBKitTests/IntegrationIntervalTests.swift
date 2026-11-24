@@ -71,7 +71,7 @@ import Testing
             #expect(try await IntervalRowModel.find(5, on: tx)?.leaseWindow == mixed)
         }
     }
-    // Waits for slice 14: `aggregateIntervalsSupportReverseDateArithmetic`, a timestamp plus and minus
+    // Waits for slice 14b: `aggregateIntervalsSupportReverseDateArithmetic`, a timestamp plus and minus
     // `SQL.sum(IntervalRowModel.leaseWindow)` of rows 1 and 2 as projections, and the sum of no rows decoding as `nil`.
 }
 

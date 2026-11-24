@@ -48,4 +48,30 @@ import Testing
         )
         #expect(rendered.binds.map(\.description) == ["9", "4", "1"])
     }
+
+    /// rust-dbkit orders by the alias `computed_value`, which this port doesn't support yet, so it orders by the
+    /// expression.
+    @Test func selectOnlyAcceptsArithmeticProjectionAliases() {
+        let computedValue: Expr<Int32> = RecordModel.baselineValue + RecordModel.leftValue
+        let rendered = RecordModel.query().select(computedValue.as("computed_value")).orderBy(computedValue.desc).render()
+        #expect(
+            rendered.sql
+                == #"SELECT ("records"."baseline_value" + "records"."left_value") AS "computed_value" FROM "records" ORDER BY ("records"."baseline_value" + "records"."left_value") DESC"#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
+    /// As in `smallintArithmeticPromotesFiltersToIntegerOperands`, an `integer` operand makes the projection
+    /// `Expr<Int32>`; two `smallint`s stay `Expr<Int16>`.
+    @Test func smallintArithmeticProjectionIsUsableAsIntegerExpression() {
+        let totalUnits: Expr<Int32> = CompactRecordModel.leftUnits + CompactRecordModel.rightUnits.cast(to: Int32.self)
+        let delta: Expr<Int16> = CompactRecordModel.leftUnits - CompactRecordModel.rightUnits
+        let query: Projection<Int32> = CompactRecordModel.query().select(totalUnits.as("total_units")).orderBy(delta.desc)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT ("compact_records"."left_units" + CAST("compact_records"."right_units" AS integer)) AS "total_units" FROM "compact_records" ORDER BY ("compact_records"."left_units" - "compact_records"."right_units") DESC"#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
 }

@@ -209,6 +209,47 @@ class ValueRowModel {
         }
     }
 
+    /// A `Decodable` type matches each property to the alias of the same name or of its snake_case form, and fails on a
+    /// property without a column. A comparison on a nullable column decodes as `Bool?`, `nil` where the column is NULL.
+    @Test func projectionsDecodeByAliasAndNullableComparisonsAsOptionals() async throws {
+        struct Contact: Decodable, Equatable {
+            let name: String
+            let emailAddress: String
+            let isUS: Bool?
+        }
+
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            try await seedUsers(on: tx)
+
+            let contacts = try await UserModel.query()
+                .select(UserModel.name.as("name"), UserModel.email.as("email_address"), (UserModel.region == "us").as("isUS"))
+                .orderBy(UserModel.id.asc)
+                .all(as: Contact.self, on: tx)
+            #expect(
+                contacts == [
+                    Contact(name: "Alex", emailAddress: "alex@example.com", isUS: false),
+                    Contact(name: "Sam", emailAddress: "sam@example.com", isUS: nil),
+                    Contact(name: "Kim", emailAddress: "kim@example.com", isUS: true),
+                ])
+
+            let missing = try await #require(throws: DBKitError.self) {
+                try await UserModel.query().select(UserModel.name.as("name")).first(as: Contact.self, on: tx)
+            }
+            #expect(missing == .missingColumn("emailAddress"))
+
+            let isUS: [Bool?] = try await UserModel.query().select(UserModel.region == "us").orderBy(UserModel.id.asc).all(on: tx)
+            #expect(isUS == [false, nil, true])
+
+            let withoutRegion: [Bool] = try await UserModel.query()
+                .select(UserModel.region.isNull)
+                .distinct()
+                .orderBy(UserModel.region.isNull.asc)
+                .all(on: tx)
+            #expect(withoutRegion == [false, true])
+        }
+    }
+
     @Test func mutationsAndActiveModels() async throws {
         try await withRollback { tx in
             try await createUsers(on: tx)
@@ -373,7 +414,7 @@ class ValueRowModel {
                 .all(on: tx)
             #expect(masked.count == 1)
 
-            // Waits for slice 14: the `sales` totals per region, as `Decodable` rows, as a `@Projection` and as a tuple.
+            // Waits for slice 14b: the `sales` totals per region, as `Decodable` rows, as a `@Projection` and as a tuple.
             // Waits for slice 16: the string functions on `sales`.
             // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update,
             // `SQL.row(TaskModel.state, TaskModel.title).in(…)` over the enum column, and `deliveries`.

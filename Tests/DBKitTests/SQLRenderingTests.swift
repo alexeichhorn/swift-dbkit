@@ -58,7 +58,48 @@ class LeaseModel {
         let delete = TodoModel.delete().filter(notToday).render()
         #expect(delete.sql == #"DELETE FROM "todos" WHERE NOT ("todos"."note" = $1)"#)
         #expect(delete.binds.map(\.description) == ["today"])
-        // Waits for slice 14: `select(TodoModel.note == "today")` decodes as `Bool?`, `nil` for a row whose note is NULL.
+        // `IntegrationTests.projectionsDecodeByAliasAndNullableComparisonsAsOptionals` decodes such a projection.
+        let selected: Projection<Bool?> = TodoModel.query().select(isToday)
+        let projection = selected.render()
+        #expect(projection.sql == #"SELECT "todos"."note" = $1 FROM "todos""#)
+        #expect(projection.binds.map(\.description) == ["today"])
+    }
+
+    /// Projections take the builder methods of model queries, and `select` keeps what was built before it. Binds are
+    /// numbered in the order of the SQL text, so the select list's come first.
+    @Test func projectionsTakeTheQueryBuilders() {
+        @Projection struct TodoSummary {
+            let title: String
+            let isToday: Bool?
+        }
+        let summaries: ProjectionQuery<TodoSummary> = TodoModel.query()
+            .filter(TodoModel.userID == 7)
+            .select(TodoSummary.columns(title: TodoModel.title, isToday: TodoModel.note == "today"))
+            .filter(!TodoModel.isComplete)
+            .distinct()
+            .orderBy(TodoModel.title.asc)
+            .limit(10)
+            .offset(20)
+        let rendered = summaries.render()
+        #expect(
+            rendered.sql
+                == #"SELECT DISTINCT "todos"."title", "todos"."note" = $1 FROM "todos" WHERE "todos"."user_id" = $2 AND NOT ("todos"."is_complete") ORDER BY "todos"."title" ASC LIMIT 10 OFFSET 20"#
+        )
+        #expect(rendered.binds.map(\.description) == ["today", "7"])
+
+        let owners: Projection<Int64, String?> = TodoModel.query()
+            .select(TodoModel.userID.as("user_id"), TodoModel.note.as("note"))
+            .distinct()
+            .filter(TodoModel.isComplete)
+            .orderBy(TodoModel.userID.desc)
+            .limit(5)
+            .offset(10)
+        let ownersRendered = owners.render()
+        #expect(
+            ownersRendered.sql
+                == #"SELECT DISTINCT "todos"."user_id" AS "user_id", "todos"."note" AS "note" FROM "todos" WHERE "todos"."is_complete" ORDER BY "todos"."user_id" DESC LIMIT 5 OFFSET 10"#
+        )
+        #expect(ownersRendered.binds.isEmpty)
     }
 
     @Test func nullChecksAndFallbacks() {

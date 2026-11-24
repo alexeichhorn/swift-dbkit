@@ -103,8 +103,11 @@ private func bitwiseOperatorsFollowPostgres() {
         .filter((B.nullableLarge & 1) == 1)
         .orderBy((B.largeValue ^ 255).desc)
         .render()
-    // Waits for slice 14: the projections `mediumValue | 8` as `enabled_value` and `largeValue << shiftCount` as
-    // `shifted_value`.
+    let projection: Projection<Int32, Int64> = B.query()
+        .filter((B.nullableLarge & 1) == 1)
+        .select((B.mediumValue | 8).as("enabled_value"), (B.largeValue << B.shiftCount).as("shifted_value"))
+        .orderBy((B.largeValue ^ 255).desc)
+    _ = projection.render()
 
     _ = B.update()
         .set(B.mediumValue, to: B.smallValue & B.mediumValue)

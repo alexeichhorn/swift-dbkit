@@ -9,12 +9,16 @@ class ScheduleModel {
 }
 
 private func intervalExpressionsOrderQueries() {
-    let _: Expr<Interval> = SQL.interval(hours: 6)
-    let _: Expr<Interval> = SQL.interval(seconds: 0.5)
+    let base: Expr<Interval> = SQL.interval(hours: 6)
+    let jitter: Expr<Interval> = SQL.interval(seconds: 0.5)
     let retryHours: Expr<Interval> = SQL.interval(hours: ScheduleModel.baseIntervalHours)
     let retryMinutes: Expr<Interval> = SQL.interval(minutes: ScheduleModel.backoffMinutes ?? 15)
 
     _ = ScheduleModel.query().orderBy(retryHours.asc).orderBy(retryMinutes.asc).render()
-    // Waits for slice 14: `SQL.interval(hours: 6)`, `SQL.interval(seconds: 0.5)`, `retryHours` and `retryMinutes` as
-    // the projections `base_interval`, `jitter`, `retry_hours` and `retry_minutes`.
+
+    let projection: Projection<Interval, Interval, Interval, Interval> = ScheduleModel.query()
+        .select(base.as("base_interval"), jitter.as("jitter"), retryHours.as("retry_hours"), retryMinutes.as("retry_minutes"))
+        .orderBy(retryHours.asc)
+        .orderBy(retryMinutes.asc)
+    _ = projection.render()
 }

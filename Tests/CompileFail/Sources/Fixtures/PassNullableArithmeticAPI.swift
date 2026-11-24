@@ -226,7 +226,7 @@ private func divisionPromotesAndPropagatesNull() {
     let _: Expr<Double> = Double(1) / R.requiredI64
     let _: Expr<Double?> = Float(1) / R.nullableI32
     // Waits for slice 15: `SQL.power(2.0, 3) / R.requiredI64` is `Expr<Double>`.
-    // Waits for slice 14: `SQL.sum(R.requiredI32) / R.requiredF64` is `Expr<Double?>`.
+    // Waits for slice 14b: `SQL.sum(R.requiredI32) / R.requiredF64` is `Expr<Double?>`.
 }
 
 private func castsToDoubleKeepNullability() {
@@ -241,7 +241,7 @@ private func castsToDoubleKeepNullability() {
     let _: Expr<Double> = R.requiredF64.cast(to: Double.self)
     let _: Expr<Double?> = R.nullableF64.cast(to: Double.self)
     let _: Expr<Double> = (R.requiredI32 + R.requiredI32).cast(to: Double.self)
-    // Waits for slice 14: `SQL.sum(R.requiredI32).cast(to: Double.self)` is `Expr<Double?>`.
+    // Waits for slice 14b: `SQL.sum(R.requiredI32).cast(to: Double.self)` is `Expr<Double?>`.
 
     // Casting one integer operand divides with a fraction, leaving integer division as it is.
     let _: Expr<Double> = R.requiredI32.cast(to: Double.self) / R.requiredI64

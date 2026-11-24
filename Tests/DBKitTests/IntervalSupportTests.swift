@@ -13,14 +13,17 @@ class ScheduleModel {
     var retryInterval: Interval
 }
 
-/// rust-dbkit selects most interval expressions as projections. Until projections exist, the expressions are ordered by,
-/// which renders them and their binds in the same order.
+/// rust-dbkit selects most interval expressions as projections. The tests also order by the expressions, which renders
+/// them and their binds in the same order.
 @Suite struct IntervalSupportTests {
     @Test func compilesIntervalHoursWithLiteral() {
         let rendered = ScheduleModel.query().orderBy(SQL.interval(hours: 6).asc).render()
         #expect(rendered.sql == #"SELECT "schedules".* FROM "schedules" ORDER BY ($1 * INTERVAL '1 hour') ASC"#)
         #expect(typedBinds(rendered) == ["Int(6)"])
-        // Waits for slice 14: the expression as the projection `lease_window`.
+
+        let projected = ScheduleModel.query().select(SQL.interval(hours: 6).as("lease_window")).render()
+        #expect(projected.sql == #"SELECT ($1 * INTERVAL '1 hour') AS "lease_window" FROM "schedules""#)
+        #expect(typedBinds(projected) == ["Int(6)"])
     }
 
     @Test func compilesIntervalHoursWithColumn() {
@@ -29,7 +32,10 @@ class ScheduleModel {
             rendered.sql
                 == #"SELECT "schedules".* FROM "schedules" ORDER BY ("schedules"."base_interval_hours" * INTERVAL '1 hour') ASC"#)
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 14: the expression as the projection `lease_window`.
+
+        let projected = ScheduleModel.query().select(SQL.interval(hours: ScheduleModel.baseIntervalHours).as("lease_window")).render()
+        #expect(projected.sql == #"SELECT ("schedules"."base_interval_hours" * INTERVAL '1 hour') AS "lease_window" FROM "schedules""#)
+        #expect(projected.binds.isEmpty)
     }
 
     /// rust-dbkit coalesces the required `base_interval_hours`; `??` takes a nullable column, so the nested expression
@@ -41,28 +47,43 @@ class ScheduleModel {
                 == #"SELECT "schedules".* FROM "schedules" ORDER BY (COALESCE("schedules"."optional_interval_units", $1) * INTERVAL '1 hour') ASC"#
         )
         #expect(typedBinds(rendered) == ["Int32(24)"])
-        // Waits for slice 14: the expression as the projection `lease_window`.
+
+        let projected = ScheduleModel.query().select(SQL.interval(hours: ScheduleModel.optionalIntervalUnits ?? 24).as("lease_window"))
+            .render()
+        #expect(
+            projected.sql
+                == #"SELECT (COALESCE("schedules"."optional_interval_units", $1) * INTERVAL '1 hour') AS "lease_window" FROM "schedules""#)
+        #expect(typedBinds(projected) == ["Int32(24)"])
     }
 
     @Test func compilesIntervalMinutesWithNegativeLiteral() {
         let rendered = ScheduleModel.query().orderBy(SQL.interval(minutes: -30).asc).render()
         #expect(rendered.sql == #"SELECT "schedules".* FROM "schedules" ORDER BY ($1 * INTERVAL '1 minute') ASC"#)
         #expect(typedBinds(rendered) == ["Int(-30)"])
-        // Waits for slice 14: the expression as the projection `retry_after`.
+
+        let projected = ScheduleModel.query().select(SQL.interval(minutes: -30).as("retry_after")).render()
+        #expect(projected.sql == #"SELECT ($1 * INTERVAL '1 minute') AS "retry_after" FROM "schedules""#)
+        #expect(typedBinds(projected) == ["Int(-30)"])
     }
 
     @Test func compilesIntervalDaysWithLiteral() {
         let rendered = ScheduleModel.query().orderBy(SQL.interval(days: 2).asc).render()
         #expect(rendered.sql == #"SELECT "schedules".* FROM "schedules" ORDER BY ($1 * INTERVAL '1 day') ASC"#)
         #expect(typedBinds(rendered) == ["Int(2)"])
-        // Waits for slice 14: the expression as the projection `cooldown`.
+
+        let projected = ScheduleModel.query().select(SQL.interval(days: 2).as("cooldown")).render()
+        #expect(projected.sql == #"SELECT ($1 * INTERVAL '1 day') AS "cooldown" FROM "schedules""#)
+        #expect(typedBinds(projected) == ["Int(2)"])
     }
 
     @Test func compilesIntervalSecondsWithFractionalLiteral() {
         let rendered = ScheduleModel.query().orderBy(SQL.interval(seconds: 1.5).asc).render()
         #expect(rendered.sql == #"SELECT "schedules".* FROM "schedules" ORDER BY ($1 * INTERVAL '1 second') ASC"#)
         #expect(typedBinds(rendered) == ["Double(1.5)"])
-        // Waits for slice 14: the expression as the projection `jitter`.
+
+        let projected = ScheduleModel.query().select(SQL.interval(seconds: 1.5).as("jitter")).render()
+        #expect(projected.sql == #"SELECT ($1 * INTERVAL '1 second') AS "jitter" FROM "schedules""#)
+        #expect(typedBinds(projected) == ["Double(1.5)"])
     }
 
     @Test func compilesIntervalConstructorsWithNullableColumns() {
@@ -78,7 +99,15 @@ class ScheduleModel {
                 == #"SELECT "schedules".* FROM "schedules" ORDER BY ("schedules"."optional_interval_units" * INTERVAL '1 day') ASC, ("schedules"."optional_interval_units" * INTERVAL '1 hour') ASC, ("schedules"."optional_interval_units" * INTERVAL '1 minute') ASC, ("schedules"."optional_seconds" * INTERVAL '1 second') ASC"#
         )
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 14: the four expressions as the projections `days`, `hours`, `minutes` and `seconds`.
+
+        let projected = ScheduleModel.query()
+            .select(days.as("days"), hours.as("hours"), minutes.as("minutes"), seconds.as("seconds"))
+            .render()
+        #expect(
+            projected.sql
+                == #"SELECT ("schedules"."optional_interval_units" * INTERVAL '1 day') AS "days", ("schedules"."optional_interval_units" * INTERVAL '1 hour') AS "hours", ("schedules"."optional_interval_units" * INTERVAL '1 minute') AS "minutes", ("schedules"."optional_seconds" * INTERVAL '1 second') AS "seconds" FROM "schedules""#
+        )
+        #expect(projected.binds.isEmpty)
     }
 
     /// `Date` stands in for both of rust-dbkit's timestamp types, so its four expressions are two here.
@@ -96,7 +125,15 @@ class ScheduleModel {
         try #require(rendered.binds.count == 2)
         #expect(rendered.binds[0].value as? Date == timestamp)
         #expect(rendered.binds[1].value as? Date == timestamp)
-        // Waits for slice 14: the two expressions as the projections `added` and `subtracted`.
+
+        let projected = ScheduleModel.query().select(added.as("added"), subtracted.as("subtracted")).render()
+        #expect(
+            projected.sql
+                == #"SELECT ($1 + ("schedules"."optional_interval_units" * INTERVAL '1 hour')) AS "added", ($2 - ("schedules"."optional_interval_units" * INTERVAL '1 hour')) AS "subtracted" FROM "schedules""#
+        )
+        try #require(projected.binds.count == 2)
+        #expect(projected.binds[0].value as? Date == timestamp)
+        #expect(projected.binds[1].value as? Date == timestamp)
     }
 
     @Test func intervalExpressionCanCompareToIntervalColumns() {

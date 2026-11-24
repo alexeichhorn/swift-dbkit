@@ -13,8 +13,8 @@ class BitRegisterModel {
     var nullableShiftCount: Int32?
 }
 
-/// rust-dbkit selects each expression as a projection. Until projections exist, the expressions are ordered by, which
-/// renders them and their binds in the same order.
+/// rust-dbkit selects each expression as a projection. The tests also order by the expressions, which renders them and
+/// their binds in the same order.
 @Suite struct BitwiseSQLTests {
     @Test func compilesEveryBitwiseOperatorWithStableBindOrder() {
         let rendered = BitRegisterModel.query()
@@ -32,8 +32,22 @@ class BitRegisterModel {
                 == #"SELECT "bit_registers".* FROM "bit_registers" ORDER BY ("bit_registers"."medium_value" & $1) ASC, ("bit_registers"."medium_value" | $2) ASC, ("bit_registers"."medium_value" # $3) ASC, (~"bit_registers"."medium_value") ASC, ("bit_registers"."medium_value" << $4) ASC, ("bit_registers"."medium_value" >> $5) ASC"#
         )
         #expect(typedBinds(rendered) == ["Int32(12)", "Int32(3)", "Int32(10)", "Int32(4)", "Int16(2)"])
-        // Waits for slice 14: the six expressions as the projections `anded`, `ored`, `xored`, `inverted`,
-        // `shifted_left` and `shifted_right`.
+
+        let projected = BitRegisterModel.query()
+            .select(
+                (BitRegisterModel.mediumValue & 12).as("anded"),
+                (BitRegisterModel.mediumValue | 3).as("ored"),
+                (BitRegisterModel.mediumValue ^ 10).as("xored"),
+                (~BitRegisterModel.mediumValue).as("inverted"),
+                (BitRegisterModel.mediumValue << 4).as("shifted_left"),
+                (BitRegisterModel.mediumValue >> Int16(2)).as("shifted_right")
+            )
+            .render()
+        #expect(
+            projected.sql
+                == #"SELECT ("bit_registers"."medium_value" & $1) AS "anded", ("bit_registers"."medium_value" | $2) AS "ored", ("bit_registers"."medium_value" # $3) AS "xored", (~"bit_registers"."medium_value") AS "inverted", ("bit_registers"."medium_value" << $4) AS "shifted_left", ("bit_registers"."medium_value" >> $5) AS "shifted_right" FROM "bit_registers""#
+        )
+        #expect(typedBinds(projected) == ["Int32(12)", "Int32(3)", "Int32(10)", "Int32(4)", "Int16(2)"])
     }
 
     @Test func compilesColumnOperandsAndMixedIntegerWidths() {
@@ -46,8 +60,15 @@ class BitRegisterModel {
                 == #"SELECT "bit_registers".* FROM "bit_registers" ORDER BY ("bit_registers"."small_value" & "bit_registers"."medium_value") ASC, ("bit_registers"."medium_value" | "bit_registers"."large_value") ASC, ("bit_registers"."large_value" # "bit_registers"."small_value") ASC"#
         )
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 14: the three expressions as the projections `small_and_medium`, `medium_or_large` and
-        // `large_xor_small`.
+
+        let projected = BitRegisterModel.query()
+            .select(smallAndMedium.as("small_and_medium"), mediumOrLarge.as("medium_or_large"), largeXorSmall.as("large_xor_small"))
+            .render()
+        #expect(
+            projected.sql
+                == #"SELECT ("bit_registers"."small_value" & "bit_registers"."medium_value") AS "small_and_medium", ("bit_registers"."medium_value" | "bit_registers"."large_value") AS "medium_or_large", ("bit_registers"."large_value" # "bit_registers"."small_value") AS "large_xor_small" FROM "bit_registers""#
+        )
+        #expect(projected.binds.isEmpty)
     }
 
     /// Each use of an expression binds its values again.
@@ -77,8 +98,21 @@ class BitRegisterModel {
                 == #"SELECT "bit_registers".* FROM "bit_registers" ORDER BY ($1 & "bit_registers"."small_value") ASC, ($2 | "bit_registers"."medium_value") ASC, ($3 # "bit_registers"."large_value") ASC, ($4 << "bit_registers"."shift_count") ASC, ($5 >> "bit_registers"."shift_count") ASC"#
         )
         #expect(typedBinds(rendered) == ["Int16(15)", "Int32(8)", "Int64(255)", "Int64(1)", "Int64(-8)"])
-        // Waits for slice 14: the five expressions as the projections `anded`, `ored`, `xored`, `shifted_left` and
-        // `shifted_right`.
+
+        let projected = BitRegisterModel.query()
+            .select(
+                (Int16(15) & BitRegisterModel.smallValue).as("anded"),
+                (Int32(8) | BitRegisterModel.mediumValue).as("ored"),
+                (Int64(255) ^ BitRegisterModel.largeValue).as("xored"),
+                (Int64(1) << BitRegisterModel.shiftCount).as("shifted_left"),
+                (Int64(-8) >> BitRegisterModel.shiftCount).as("shifted_right")
+            )
+            .render()
+        #expect(
+            projected.sql
+                == #"SELECT ($1 & "bit_registers"."small_value") AS "anded", ($2 | "bit_registers"."medium_value") AS "ored", ($3 # "bit_registers"."large_value") AS "xored", ($4 << "bit_registers"."shift_count") AS "shifted_left", ($5 >> "bit_registers"."shift_count") AS "shifted_right" FROM "bit_registers""#
+        )
+        #expect(typedBinds(projected) == ["Int16(15)", "Int32(8)", "Int64(255)", "Int64(1)", "Int64(-8)"])
     }
 
     @Test func compilesNullableOperandsWithoutChangingSQLShape() {
@@ -94,8 +128,20 @@ class BitRegisterModel {
                 == #"SELECT "bit_registers".* FROM "bit_registers" ORDER BY ("bit_registers"."large_value" & "bit_registers"."nullable_value") ASC, ("bit_registers"."nullable_value" | "bit_registers"."large_value") ASC, ("bit_registers"."nullable_value" << "bit_registers"."nullable_shift_count") ASC, (~"bit_registers"."nullable_value") ASC"#
         )
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 14: the four expressions as the projections `required_with_nullable`, `nullable_with_required`,
-        // `nullable_shift` and `nullable_not`.
+
+        let projected = BitRegisterModel.query()
+            .select(
+                requiredWithNullable.as("required_with_nullable"),
+                nullableWithRequired.as("nullable_with_required"),
+                nullableShift.as("nullable_shift"),
+                nullableNot.as("nullable_not")
+            )
+            .render()
+        #expect(
+            projected.sql
+                == #"SELECT ("bit_registers"."large_value" & "bit_registers"."nullable_value") AS "required_with_nullable", ("bit_registers"."nullable_value" | "bit_registers"."large_value") AS "nullable_with_required", ("bit_registers"."nullable_value" << "bit_registers"."nullable_shift_count") AS "nullable_shift", (~"bit_registers"."nullable_value") AS "nullable_not" FROM "bit_registers""#
+        )
+        #expect(projected.binds.isEmpty)
     }
 }
 

@@ -60,9 +60,16 @@ class MixedNumberModel {
             let integerQuotient: Expr<Int32> = RecordModel.leftValue / RecordModel.rightValue
             let negative = try await RecordModel.query().filter(integerQuotient == -2).all(on: tx)
             #expect(negative.map(\.id) == [first.id])
-            // Waits for slice 14: `integerQuotient` and `floatingQuotient` as the projections `integer_quotient` and
-            // `floating_quotient` of `RecordModel.id`, ordered by `floatingQuotient` with `limit(2)`: quotients
-            // `[-2, 2]` and `[-2.5, 2.2]`.
+
+            // Rows decode into a `Decodable` struct by alias, as rust-dbkit's `DivisionResult`.
+            let quotients = try await RecordModel.query()
+                .select(RecordModel.id.as("id"), integerQuotient.as("integer_quotient"), floatingQuotient.as("floating_quotient"))
+                .orderBy(floatingQuotient.asc)
+                .limit(2)
+                .all(as: DivisionResult.self, on: tx)
+            #expect(quotients.map(\.id) == [first.id, third.id])
+            #expect(quotients.map(\.integerQuotient) == [-2, 2])
+            #expect(quotients.map(\.floatingQuotient) == [-2.5, 2.2])
         }
     }
 
@@ -83,7 +90,23 @@ class MixedNumberModel {
                 .filter(RecordModel.id == row.id)
                 .all(on: tx)
             #expect(rows.map(\.id) == [row.id])
-            // Waits for slice 14: the three quotients as projections, decoded as `Double` 2.5, `Double` 0.4 and `Float` 1.
+
+            // A `@Projection` stands in for rust-dbkit's `MixedRealDivisionResult`.
+            @Projection struct MixedRealDivisionResult {
+                let integerByReal: Double
+                let realByInteger: Double
+                let realByReal: Float
+            }
+            let result = try #require(
+                try await RecordModel.query()
+                    .select(
+                        MixedRealDivisionResult.columns(integerByReal: integerByReal, realByInteger: realByInteger, realByReal: realByReal)
+                    )
+                    .filter(RecordModel.id == row.id)
+                    .first(on: tx))
+            #expect(result.integerByReal == 2.5)
+            #expect(result.realByInteger == 0.4)
+            #expect(result.realByReal == 1)
         }
     }
 
@@ -178,13 +201,49 @@ class MixedNumberModel {
                     requiredInterval: .hours(1), nullableInterval: nil),
             ])
             .execute(on: tx)
-            // Waits for slice 14: the projections `added`, `subtracted`, `multiplied`, `divided`, `floating_divided`
-            // and `literal_minus_nullable` per row, NULL wherever an operand is NULL, and the projections
-            // `nullable_time_required_interval` (`nullableAt + requiredInterval`), `required_time_nullable_interval`
-            // (`requiredAt - nullableInterval`), `nullable_time_nullable_interval` (`nullableAt + nullableInterval`),
-            // `literal_time_plus_nullable_interval` (`base + SQL.interval(hours: nullableLeft)`) and
-            // `literal_time_minus_nullable_interval` (`base - SQL.interval(hours: nullableRight)`): base + 1 hour, base
-            // - 2 hours, base + 2 hours, base + 4 hours and base - 2 hours where no operand is NULL.
+
+            typealias R = NullableArithmeticRecordModel
+            let added: Expr<Int32?> = R.nullableLeft + R.requiredValue
+            let subtracted: Expr<Int32?> = R.requiredValue - R.nullableRight
+            let multiplied: Expr<Int32?> = R.nullableLeft * R.nullableRight
+            let divided: Expr<Int32?> = R.nullableLeft / R.nullableRight
+            let floatingDivided: Expr<Double?> = R.nullableLeft.cast(to: Double.self) / R.nullableRight
+            let literalMinusNullable: Expr<Int32?> = 100 - R.nullableLeft
+            let nullableTimeRequiredInterval: Expr<Date?> = R.nullableAt + R.requiredInterval
+            let requiredTimeNullableInterval: Expr<Date?> = R.requiredAt - R.nullableInterval
+            let nullableTimeNullableInterval: Expr<Date?> = R.nullableAt + R.nullableInterval
+            let literalTimePlusNullableInterval: Expr<Date?> = base + SQL.interval(hours: R.nullableLeft)
+            let literalTimeMinusNullableInterval: Expr<Date?> = base - SQL.interval(hours: R.nullableRight)
+            let rows = try await R.query()
+                .select(
+                    added.as("added"),
+                    subtracted.as("subtracted"),
+                    multiplied.as("multiplied"),
+                    divided.as("divided"),
+                    floatingDivided.as("floating_divided"),
+                    literalMinusNullable.as("literal_minus_nullable"),
+                    nullableTimeRequiredInterval.as("nullable_time_required_interval"),
+                    requiredTimeNullableInterval.as("required_time_nullable_interval"),
+                    nullableTimeNullableInterval.as("nullable_time_nullable_interval"),
+                    literalTimePlusNullableInterval.as("literal_time_plus_nullable_interval"),
+                    literalTimeMinusNullableInterval.as("literal_time_minus_nullable_interval")
+                )
+                .orderBy(R.id.asc)
+                .all(as: NullableArithmeticResult.self, on: tx)
+
+            let hours = { (count: Double) in base + count * 3600 }
+            #expect(rows.count == 4)
+            #expect(rows.map(\.added) == [14, nil, 14, nil])
+            #expect(rows.map(\.subtracted) == [8, 8, nil, nil])
+            #expect(rows.map(\.multiplied) == [8, nil, nil, nil])
+            #expect(rows.map(\.divided) == [2, nil, nil, nil])
+            #expect(rows.map(\.floatingDivided) == [2.0, nil, nil, nil])
+            #expect(rows.map(\.literalMinusNullable) == [96, nil, 96, nil])
+            #expect(rows.map(\.nullableTimeRequiredInterval) == [hours(1), nil, hours(1), nil])
+            #expect(rows.map(\.requiredTimeNullableInterval) == [hours(-2), hours(-2), nil, nil])
+            #expect(rows.map(\.nullableTimeNullableInterval) == [hours(2), nil, nil, nil])
+            #expect(rows.map(\.literalTimePlusNullableInterval) == [hours(4), nil, hours(4), nil])
+            #expect(rows.map(\.literalTimeMinusNullableInterval) == [hours(-2), hours(-2), nil, nil])
 
             let oneHourLater = base + 3600
             let matching = try await NullableArithmeticRecordModel.query()
@@ -237,9 +296,56 @@ class MixedNumberModel {
                 }
             )
             .execute(on: tx)
-            // Waits for slice 14: the projections `less`, `less_or_equal`, `greater`, `greater_or_equal`, `nullable_left`,
-            // `required` and `coalesced` comparing with `nullableLeft + 1`, `requiredValue + 1` and `nullableLeft ?? 0`,
-            // and the projections comparing `requiredValue` with `nullableLeft` directly.
+
+            // A `@Projection` stands in for rust-dbkit's `NullableRhsComparisonResult`, and a tuple for its
+            // `DirectNullableRhsComparisonResult`. `??` is rust-dbkit's `func::coalesce` here.
+            @Projection struct NullableRHSComparisonResult {
+                let less: Bool?
+                let lessOrEqual: Bool?
+                let greater: Bool?
+                let greaterOrEqual: Bool?
+                let nullableLeft: Bool?
+                let required: Bool
+                let coalesced: Bool
+            }
+            typealias R = NullableArithmeticRecordModel
+            let nullableRHS: Expr<Int32?> = R.nullableLeft + 1
+            let requiredRHS: Expr<Int32> = R.requiredValue + 1
+            let less: Expr<Bool?> = R.requiredValue < nullableRHS
+            let lessOrEqual: Expr<Bool?> = R.requiredValue <= nullableRHS
+            let greater: Expr<Bool?> = R.requiredValue > nullableRHS
+            let greaterOrEqual: Expr<Bool?> = R.requiredValue >= nullableRHS
+            let nullableLeft: Expr<Bool?> = R.nullableLeft < requiredRHS
+            let required: Expr<Bool> = R.requiredValue < requiredRHS
+            let coalesced: Expr<Bool> = R.requiredValue < (R.nullableLeft ?? 0)
+            let rows = try await R.query()
+                .select(
+                    NullableRHSComparisonResult.columns(
+                        less: less, lessOrEqual: lessOrEqual, greater: greater, greaterOrEqual: greaterOrEqual,
+                        nullableLeft: nullableLeft, required: required, coalesced: coalesced)
+                )
+                .orderBy(R.id.asc)
+                .all(on: tx)
+            #expect(rows.map(\.less) == [false, false, true, nil])
+            #expect(rows.map(\.lessOrEqual) == [false, true, true, nil])
+            #expect(rows.map(\.greater) == [true, false, false, nil])
+            #expect(rows.map(\.greaterOrEqual) == [true, true, false, nil])
+            #expect(rows.map(\.nullableLeft) == [true, true, true, nil])
+            #expect(rows.map(\.required) == [true, true, true, true])
+            #expect(rows.map(\.coalesced) == [false, false, false, false])
+
+            let directLess: Expr<Bool?> = R.requiredValue < R.nullableLeft
+            let directLessOrEqual: Expr<Bool?> = R.requiredValue <= R.nullableLeft
+            let directGreater: Expr<Bool?> = R.requiredValue > R.nullableLeft
+            let directGreaterOrEqual: Expr<Bool?> = R.requiredValue >= R.nullableLeft
+            let directRows: [(Bool?, Bool?, Bool?, Bool?)] = try await R.query()
+                .select(directLess, directLessOrEqual, directGreater, directGreaterOrEqual)
+                .orderBy(R.id.asc)
+                .all(on: tx)
+            #expect(directRows.map(\.0) == [false, false, false, nil])
+            #expect(directRows.map(\.1) == [false, false, true, nil])
+            #expect(directRows.map(\.2) == [true, true, false, nil])
+            #expect(directRows.map(\.3) == [true, true, true, nil])
 
             let greater = try await NullableArithmeticRecordModel.query()
                 .filter(NullableArithmeticRecordModel.requiredValue > NullableArithmeticRecordModel.nullableLeft + 1)
@@ -253,6 +359,28 @@ class MixedNumberModel {
             #expect(lessOrEqual.map(\.id) == [2, 3])
         }
     }
+}
+
+/// rust-dbkit's `DivisionResult`.
+private struct DivisionResult: Decodable {
+    let id: Int64
+    let integerQuotient: Int32
+    let floatingQuotient: Double
+}
+
+/// rust-dbkit's `NullableArithmeticResult`.
+private struct NullableArithmeticResult: Decodable {
+    let added: Int32?
+    let subtracted: Int32?
+    let multiplied: Int32?
+    let divided: Int32?
+    let floatingDivided: Double?
+    let literalMinusNullable: Int32?
+    let nullableTimeRequiredInterval: Date?
+    let requiredTimeNullableInterval: Date?
+    let nullableTimeNullableInterval: Date?
+    let literalTimePlusNullableInterval: Date?
+    let literalTimeMinusNullableInterval: Date?
 }
 
 private func setupSchema(on tx: Transaction) async throws {

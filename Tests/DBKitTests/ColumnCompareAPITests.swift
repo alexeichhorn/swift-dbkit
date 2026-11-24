@@ -57,7 +57,10 @@ class JobModel {
         let rendered = JobModel.query().filter(differs).render()
         #expect(rendered.sql == #"SELECT "jobs".* FROM "jobs" WHERE "jobs"."embedding_hash" <> "jobs"."embedding""#)
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 14: `differs` as the projection `differs`, rust-dbkit's `select_only().column_as(differs, "differs")`.
+
+        let projected = JobModel.query().select(differs.as("differs")).render()
+        #expect(projected.sql == #"SELECT "jobs"."embedding_hash" <> "jobs"."embedding" AS "differs" FROM "jobs""#)
+        #expect(projected.binds.isEmpty)
     }
 
     @Test func compilesNullableColumnComparisonsInBooleanPredicates() {
