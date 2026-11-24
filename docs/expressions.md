@@ -174,3 +174,78 @@ and intervals add to and subtract from each other. A nullable operand makes the 
 
 An `Interval` value keeps PostgreSQL's months, days and microseconds; `.days(_:)`, `.hours(_:)`, `.minutes(_:)` and
 `.seconds(_:)` build one.
+
+## Projections
+
+`select(…)` switches from models to expressions. Results decode as a typed tuple whose element types follow the
+expressions, or into a `Decodable` type matched by alias (exact name or snake_case):
+
+```swift
+@Model(table: "sales")
+class SaleModel {
+    @Key @AutoIncrement var id: Int64
+    var region: String
+    var amount: Int64
+    var discount: Int64?
+}
+
+struct SaleSummary: Decodable {
+    let region: String
+    let netAmount: Int64?
+    let isDiscounted: Bool?
+}
+```
+
+```swift
+let rows: [(String, Int64?)] = try await SaleModel.query()
+    .select(SaleModel.region, SaleModel.amount - SaleModel.discount)
+    .filter(SaleModel.amount > 0)
+    .all(on: db)
+
+let summaries = try await SaleModel.query()
+    .select(
+        SaleModel.region.as("region"),
+        (SaleModel.amount - SaleModel.discount).as("net_amount"),
+        (SaleModel.discount > 0).as("isDiscounted")
+    )
+    .all(as: SaleSummary.self, on: db)
+```
+
+A selected expression keeps its nullability. A comparison on a nullable operand is `Bool?` and decodes NULL as
+`nil`, so `SaleModel.discount > 0` is `nil` for a sale without a discount. A `Decodable` type isn't checked against
+the select list: give such a property an optional type, and a property without a matching alias fails with
+`DBKitError.missingColumn`.
+
+Use either all aliased or all unaliased expressions in one `select`. A projection takes `filter`, `distinct`,
+`orderBy`, `limit` and `offset` like a model query, and keeps what was built before `select`. `first(on:)` and
+`first(as:on:)` fetch one row.
+
+## Typed Projections
+
+`@Projection` names the result columns in code, with no aliases. It generates `columns(…)` on the struct, with one
+labelled parameter per stored property:
+
+```swift
+@Projection
+struct SaleLine {
+    let region: String
+    let netAmount: Int64
+    let isDiscounted: Bool?
+}
+
+let lines = try await SaleModel.query()
+    .select(
+        SaleLine.columns(
+            region: SaleModel.region,
+            netAmount: SaleModel.amount - (SaleModel.discount ?? 0),
+            isDiscounted: SaleModel.discount > 0
+        )
+    )
+    .orderBy(SaleModel.region.asc)
+    .all(on: db)  // [SaleLine]
+```
+
+A missing property, a misspelled label and an expression of another type are compile errors. The types must match
+exactly, so a nullable expression, such as a comparison on a nullable column, needs an Optional property or `??`. The
+struct can be declared inside the function that runs the query. It needs its memberwise initializer and must be
+`Sendable`, which a public struct has to declare itself.
