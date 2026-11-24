@@ -1,3 +1,4 @@
+import Foundation
 import Logging
 import PostgresNIO
 
@@ -41,8 +42,27 @@ extension DatabaseExecutor {
     func postgresQuery(_ rendered: RenderedSQL) throws -> PostgresQuery {
         var bindings = PostgresBindings(capacity: rendered.binds.count)
         for bind in rendered.binds {
-            try bindings.append(bind.value)
+            if let date = bind.value as? Date {
+                bindings.append(MicrosecondTimestamp(date: date))
+            } else {
+                try bindings.append(bind.value)
+            }
         }
         return PostgresQuery(unsafeSQL: rendered.sql, binds: bindings)
+    }
+}
+
+/// Binds a `Date` rounded to the nearest microsecond. PostgresNIO rounds down, so a timestamp read from a row could be
+/// written back one microsecond lower.
+private struct MicrosecondTimestamp: PostgresNonThrowingEncodable {
+    static let psqlType = PostgresDataType.timestamptz
+    static let psqlFormat = PostgresFormat.binary
+    /// PostgreSQL counts from 2000-01-01.
+    static let epoch = Date(timeIntervalSince1970: 946_684_800)
+
+    let date: Date
+
+    func encode<JSONEncoder: PostgresJSONEncoder>(into byteBuffer: inout ByteBuffer, context: PostgresEncodingContext<JSONEncoder>) {
+        byteBuffer.writeInteger(Int64((date.timeIntervalSince(Self.epoch) * 1_000_000).rounded()))
     }
 }
