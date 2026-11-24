@@ -3,11 +3,14 @@ import PostgresNIO
 
 /// A Swift type stored in one database column. `Optional` marks a nullable column.
 ///
-/// The `As…` associated types carry nullability into results: `String.AsBool` is `Bool`, `String?.AsBool` is `Bool?`.
+/// The `As…` associated types carry nullability into function results: `String.AsInt32` is `Int32`,
+/// `String?.AsInt32` is `Int32?`.
 public protocol SQLType: Sendable {
     associatedtype NonNull: SQLValue
     associatedtype AsBool
+    associatedtype AsInt32
     associatedtype AsString
+    associatedtype AsStringArray
     associatedtype AsDouble
     associatedtype AsInterval
 
@@ -19,7 +22,10 @@ public protocol SQLType: Sendable {
 
 /// A non-null value that can be bound as a query parameter and decoded from a result column.
 public protocol SQLValue: SQLType, SQLArgument, PostgresEncodable, PostgresDecodable
-where NonNull == Self, Value == Self, AsBool == Bool, AsString == String, AsDouble == Double, AsInterval == Interval {
+where
+    NonNull == Self, Value == Self, AsBool == Bool, AsInt32 == Int32, AsString == String, AsStringArray == [String],
+    AsDouble == Double, AsInterval == Interval
+{
     /// PostgreSQL type name, used for `CAST` and typed placeholders.
     static var sqlTypeName: String { get }
 }
@@ -35,7 +41,9 @@ extension SQLValue {
 extension Optional: SQLType where Wrapped: SQLValue {
     public typealias NonNull = Wrapped
     public typealias AsBool = Bool?
+    public typealias AsInt32 = Int32?
     public typealias AsString = String?
+    public typealias AsStringArray = [String]?
     public typealias AsDouble = Double?
     public typealias AsInterval = Interval?
 
@@ -87,7 +95,7 @@ extension Bool: SQLTextCastable, SQLCastPartner {
     public static var sqlTypeName: String { "boolean" }
     public typealias CastPartner = Int32
 }
-extension String: SQLTextCastable { public static var sqlTypeName: String { "text" } }
+extension String: SQLTextCastable, SQLTextArgument { public static var sqlTypeName: String { "text" } }
 extension UUID: SQLTextCastable { public static var sqlTypeName: String { "uuid" } }
 extension Date: SQLTextCastable, SQLCastPartner {
     public static var sqlTypeName: String { "timestamptz" }
