@@ -816,13 +816,27 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             }
             #expect(try await RolledBackNoteModel.query().count(on: db) == 0)
 
-            try await db.transaction { tx in
-                // Waits for slice 24: `tx.setLocal("statement_timeout", "5s")` before the lock, read back after it with
-                // `SHOW statement_timeout`.
+            let timeout = try await db.transaction { tx -> String? in
+                try await tx.setLocal("statement_timeout", "5s")
                 let locked = try await RolledBackNoteModel.query().forUpdate(.skipLocked).all(on: tx)
                 #expect(locked.isEmpty)
+                return try await tx.query("SHOW statement_timeout").collect().first?.decode(String.self)
             }
+            #expect(timeout == "5s")
         }
+    }
+
+    /// The name and the value are bind values, so quotes and SQL in them stay data.
+    @Test func setLocalSendsTheNameAndValueAsData() async throws {
+        let value = "it's'; SET statement_timeout = '1ms'; --"
+        try await withRollback { tx in
+            try await tx.setLocal("dbkit.test_setting", value)
+            #expect(try await tx.query("SELECT current_setting('dbkit.test_setting')").collect().first?.decode(String.self) == value)
+        }
+        let error = try await #require(throws: PSQLError.self) {
+            try await withRollback { tx in try await tx.setLocal("statement_timeout'; --", "5s") }
+        }
+        #expect(error.serverInfo?[.sqlState] == "42704")
     }
 
     /// PostgresNIO never answers a query sent on a closed connection, so without a check these wait forever.
