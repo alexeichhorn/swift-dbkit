@@ -7,6 +7,7 @@ private let macros: [String: MacroSpec] = [
     "Model": MacroSpec(type: ModelMacro.self, conformances: ["Model", "Sendable"]),
     "Key": MacroSpec(type: MarkerMacro.self),
     "AutoIncrement": MacroSpec(type: MarkerMacro.self),
+    "DatabaseDefault": MacroSpec(type: MarkerMacro.self),
 ]
 
 /// The generated code itself is covered by compiling the test models; these check the mistakes `@Model` explains.
@@ -217,6 +218,67 @@ private let macros: [String: MacroSpec] = [
             mistake.source,
             expandedSource: mistake.expanded,
             diagnostics: [DiagnosticSpec(message: mistake.message, line: 1, column: 1)],
+            macroSpecs: macros,
+            failureHandler: { Issue.record(Comment(rawValue: $0.message)) }
+        )
+    }
+
+    /// The database provides a `@DatabaseDefault` value, so neither `nil` nor a Swift default can stand for it.
+    @Test(arguments: [
+        Mistake(
+            source: """
+                @Model(table: "tasks")
+                class TaskModel {
+                    @DatabaseDefault var updatedAt: Date?
+                }
+                """,
+            expanded: """
+                class TaskModel {
+                    @DBKit._Column var updatedAt: Date?
+                }
+                """,
+            message: "@DatabaseDefault column 'updatedAt' can't be optional or have a Swift default; the database provides the value"
+        ),
+        Mistake(
+            source: """
+                @Model(table: "tasks")
+                class TaskModel {
+                    @DatabaseDefault var updatedAt: Date = Date()
+                }
+                """,
+            expanded: """
+                class TaskModel {
+                    @DBKit._Column var updatedAt: Date = Date()
+                }
+                """,
+            message: "@DatabaseDefault column 'updatedAt' can't be optional or have a Swift default; the database provides the value"
+        ),
+    ])
+    func rejectsOptionalOrSwiftDefaultedDatabaseDefaults(_ mistake: Mistake) {
+        assertMacroExpansion(
+            mistake.source,
+            expandedSource: mistake.expanded,
+            diagnostics: [DiagnosticSpec(message: mistake.message, line: 1, column: 1)],
+            macroSpecs: macros,
+            failureHandler: { Issue.record(Comment(rawValue: $0.message)) }
+        )
+    }
+
+    /// The schema is part of the generated SQL, so it can't come from a value known only at run time.
+    @Test func rejectsASchemaThatIsNotAStringLiteral() {
+        assertMacroExpansion(
+            """
+            @Model(table: "users", schema: appSchema)
+            class UserModel {
+                @Key var id: Int64
+            }
+            """,
+            expandedSource: """
+                class UserModel {
+                    @DBKit._Column var id: Int64
+                }
+                """,
+            diagnostics: [DiagnosticSpec(message: "@Model needs a string literal `schema:` argument", line: 1, column: 1)],
             macroSpecs: macros,
             failureHandler: { Issue.record(Comment(rawValue: $0.message)) }
         )

@@ -132,7 +132,7 @@ class DeliveryModel {
     var state: DeliveryState
 }
 
-/// The kit's `tasks`. Waits for slice 28: `@DatabaseDefault var updatedAt: Date`.
+/// The kit's `tasks`.
 @Model(table: "tasks")
 class TaskModel {
     @Key @AutoIncrement var id: Int64
@@ -141,6 +141,26 @@ class TaskModel {
     var state: TaskState
     var previousState: TaskState?
     var attempts: Int32 = 0
+    @DatabaseDefault var updatedAt: Date
+}
+
+/// `users` in the schema `app`, beside the `users` of `UserModel`, which its relation `legacy` points to.
+@Model(table: "users", schema: "app")
+class AppUserModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+    var legacyID: Int64?
+    @BelongsTo(key: "legacyID") var legacy: UserModel?
+    @HasMany var posts: [BlogPostModel]
+}
+
+/// `posts` in the schema `blog`, written by users of `app`.
+@Model(table: "posts", schema: "blog")
+class BlogPostModel {
+    @Key @AutoIncrement var id: Int64
+    var authorID: Int64
+    var title: String
+    @BelongsTo(key: "authorID") var author: AppUserModel?
 }
 
 @Model(table: "projects")

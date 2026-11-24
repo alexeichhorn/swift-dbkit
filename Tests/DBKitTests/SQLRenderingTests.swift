@@ -813,6 +813,108 @@ class LeaseModel {
         #expect(deleted.binds.map(\.description) == ["2"])
     }
 
+    /// A `@DatabaseDefault` column left `nil` writes `DEFAULT` in its own row only, so one multi-row insert mixes both.
+    @Test func databaseDefaultsWriteDefaultRowByRow() {
+        let rendered = TaskModel.insert([
+            TaskModel.Insert(projectID: 1, title: "fresh", state: .pendingReview, previousState: nil),
+            TaskModel.Insert(projectID: 1, title: "old", state: .completed, previousState: nil, updatedAt: Date(timeIntervalSince1970: 0)),
+        ])
+        .render()
+        #expect(
+            rendered.sql
+                == #"INSERT INTO "tasks" ("project_id", "title", "state", "previous_state", "attempts", "updated_at") VALUES ($1, $2, $3::task_state, NULL, $4, DEFAULT), ($5, $6, $7::task_state, NULL, $8, $9)"#
+        )
+        #expect(rendered.binds.count == 9)
+    }
+
+    /// A model in a schema is `"schema"."table"` wherever a statement names its table or qualifies its columns.
+    /// `FOR UPDATE OF` takes the bare table name, since PostgreSQL rejects a qualified one there.
+    @Test func schemaQualifiedTablesInQueriesJoinsAndLocks() {
+        let filtered = AppUserModel.query().filter(AppUserModel.name == "Alex").orderBy(AppUserModel.id.asc).render()
+        #expect(
+            filtered.sql
+                == #"SELECT "app"."users".* FROM "app"."users" WHERE "app"."users"."name" = $1 ORDER BY "app"."users"."id" ASC"#)
+        #expect(filtered.binds.map(\.description) == ["Alex"])
+        #expect(AppUserModel.query().forUpdate().render().sql == #"SELECT "app"."users".* FROM "app"."users" FOR UPDATE"#)
+
+        let joined = AppUserModel.query().join(\.posts).filter(BlogPostModel.title == "Hello").forUpdate().render()
+        #expect(
+            joined.sql
+                == #"SELECT "app"."users".* FROM "app"."users" JOIN "blog"."posts" ON "blog"."posts"."author_id" = "app"."users"."id" WHERE "blog"."posts"."title" = $1 FOR UPDATE OF "users""#
+        )
+
+        let custom = BlogPostModel.query()
+            .join(AppUserModel.self, on: AppUserModel.id == BlogPostModel.authorID)
+            .filter(AppUserModel.name == "Alex")
+            .render()
+        #expect(
+            custom.sql
+                == #"SELECT "blog"."posts".* FROM "blog"."posts" JOIN "app"."users" ON "app"."users"."id" = "blog"."posts"."author_id" WHERE "app"."users"."name" = $1"#
+        )
+
+        let loaded = BlogPostModel.query().with(\.author, .joined).render()
+        #expect(
+            loaded.sql
+                == #"SELECT "blog"."posts".*, "app"."users"."id" AS "author.id", "app"."users"."name" AS "author.name", "app"."users"."legacy_id" AS "author.legacy_id" FROM "blog"."posts" LEFT JOIN "app"."users" ON "app"."users"."id" = "blog"."posts"."author_id""#
+        )
+
+        let author = AppUserModel.as("author")
+        #expect(
+            author.query().leftJoin(\.posts).forUpdate(.skipLocked).render().sql
+                == #"SELECT "author".* FROM "app"."users" AS "author" LEFT JOIN "blog"."posts" ON "blog"."posts"."author_id" = "author"."id" FOR UPDATE OF "author" SKIP LOCKED"#
+        )
+    }
+
+    /// PostgreSQL finds `"users"."id"` by the bare table name, so `app.users` and `users` in one statement would make it
+    /// ambiguous. A relation join to a table of the same name in another schema takes an alias, as a self-reference does.
+    @Test func aRelationJoinToTheSameTableNameInAnotherSchemaIsAliased() {
+        let path = AppUserModel.query().filter(AppUserModel.Relations.legacy.email == "alex@example.com").render()
+        #expect(
+            path.sql
+                == #"SELECT "app"."users".* FROM "app"."users" LEFT JOIN "users" AS "users.legacy" ON "users.legacy"."id" = "app"."users"."legacy_id" WHERE "users.legacy"."email" = $1"#
+        )
+
+        let loaded = AppUserModel.query().with(\.legacy, .joined).render()
+        #expect(
+            loaded.sql
+                == #"SELECT "app"."users".*, "users.legacy"."id" AS "legacy.id", "users.legacy"."name" AS "legacy.name", "users.legacy"."email" AS "legacy.email", "users.legacy"."region" AS "legacy.region" FROM "app"."users" LEFT JOIN "users" AS "users.legacy" ON "users.legacy"."id" = "app"."users"."legacy_id""#
+        )
+    }
+
+    @Test func schemaQualifiedTablesInMutationsAndSubqueries() {
+        let insert = AppUserModel.insert(AppUserModel.Insert(name: "Alex"))
+            .onConflict(AppUserModel.id, doUpdate: AppUserModel.name)
+            .returningAll()
+            .render()
+        #expect(
+            insert.sql
+                == #"INSERT INTO "app"."users" ("name", "legacy_id") VALUES ($1, NULL) ON CONFLICT ("id") DO UPDATE SET "name" = EXCLUDED."name" RETURNING *"#
+        )
+
+        let update = AppUserModel.update().set(AppUserModel.legacyID, to: nil).filter(AppUserModel.id == 1).returningAll().render()
+        #expect(update.sql == #"UPDATE "app"."users" SET "legacy_id" = NULL WHERE "app"."users"."id" = $1 RETURNING *"#)
+
+        let delete = BlogPostModel.delete()
+            .whereExists(
+                AppUserModel.query().select(AppUserModel.id).filter(AppUserModel.id == BlogPostModel.authorID && AppUserModel.name == "Sam")
+            )
+            .render()
+        #expect(
+            delete.sql
+                == #"DELETE FROM "blog"."posts" WHERE EXISTS (SELECT "app"."users"."id" FROM "app"."users" WHERE ("app"."users"."id" = "blog"."posts"."author_id" AND "app"."users"."name" = $1))"#
+        )
+
+        let others = AppUserModel.as("others")
+        let namesakes = AppUserModel.query()
+            .whereExists(others.query().select(others.id).filter(others.name == AppUserModel.name && others.id != AppUserModel.id))
+            .whereExists(BlogPostModel.query().select(BlogPostModel.id).filter(BlogPostModel.authorID == AppUserModel.id))
+            .render()
+        #expect(
+            namesakes.sql
+                == #"SELECT "app"."users".* FROM "app"."users" WHERE EXISTS (SELECT "others"."id" FROM "app"."users" AS "others" WHERE ("others"."name" = "app"."users"."name" AND "others"."id" <> "app"."users"."id")) AND EXISTS (SELECT "blog"."posts"."id" FROM "blog"."posts" WHERE "blog"."posts"."author_id" = "app"."users"."id")"#
+        )
+    }
+
     @Test func countAndExistsWithoutJoinsWrapTheQuery() async throws {
         let query = UserModel.query().filter(UserModel.name == "Alex")
         let count = try await countSQL(query)

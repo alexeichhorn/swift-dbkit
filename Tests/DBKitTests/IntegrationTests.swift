@@ -851,10 +851,146 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
         #expect(error.serverInfo?[.sqlState] == "42704")
     }
 
+    @Test func uniqueViolationsNameTheirConstraint() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            let insert = UserModel.insert(UserModel.Insert(name: "Alex", email: "alex@example.com"))
+            try await insert.execute(on: tx)
+            let error = try await #require(throws: PSQLError.self) { try await insert.execute(on: tx) }
+            #expect(error.isUniqueViolation() && error.isUniqueViolation(of: "users_email_key"))
+            #expect(!error.isUniqueViolation(of: "users_pkey"))
+            #expect(error.constraintName == "users_email_key")
+        }
+    }
+
+    /// A dedicated connection is a session of its own, so its temp table lives until it closes.
+    @Test func dedicatedConnectionsRunQueriesUntilClosed() async throws {
+        let connection = try await testDatabase().dedicatedConnection()
+        try await connection.ping()
+        try await connection.query(
+            "CREATE TEMP TABLE users (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, region TEXT)")
+        try await UserModel.insert(UserModel.Insert(name: "Alex", email: "alex@example.com")).execute(on: connection)
+        #expect(try await UserModel.query().all(on: connection).map(\.name) == ["Alex"])
+        #expect(try await backendPID(on: connection) == backendPID(on: connection))
+
+        await connection.close()
+        await #expect(throws: DBKitError.connectionClosed) { try await connection.ping() }
+        await #expect(throws: DBKitError.connectionClosed) { try await UserModel.query().all(on: connection) }
+    }
+
+    @Test func dedicatedConnectionsNeedTheDatabaseURL() async throws {
+        let db = Database(client: PostgresClient(configuration: try PostgresClient.Configuration(url: testDatabaseURL())))
+        await #expect(throws: DBKitError.missingDatabaseURL) { try await db.dedicatedConnection() }
+        #expect(
+            DBKitError.missingDatabaseURL.description
+                == "a dedicated connection needs the database URL; create the database with Database(url:)")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func dedicatedConnectionsContendForAdvisoryLocks() async throws {
+        let db = try testDatabase()
+        let first = try await db.dedicatedConnection()
+        let second = try await db.dedicatedConnection()
+        let lock = AdvisoryLock("dbkit_test:contend-for-advisory-locks")
+        #expect(try await lock.tryAcquire(on: first))
+        #expect(try await !lock.tryAcquire(on: second))
+        #expect(try await !lock.release(on: second))
+        #expect(try await lock.release(on: first))
+        #expect(try await lock.tryAcquire(on: second))
+        await first.close()
+        await second.close()
+    }
+
+    /// A lock taken twice is held until its second release, and closing the connection releases it.
+    @Test(.timeLimit(.minutes(1))) func advisoryLocksCountAcquisitionsAndEndWithTheirConnection() async throws {
+        let db = try testDatabase()
+        let first = try await db.dedicatedConnection()
+        let second = try await db.dedicatedConnection()
+        let lock = AdvisoryLock("dbkit_test:count-acquisitions")
+        #expect(lock.name == "dbkit_test:count-acquisitions")
+        #expect(try await lock.tryAcquire(on: first))
+        #expect(try await lock.tryAcquire(on: first))
+        #expect(try await lock.release(on: first))
+        #expect(try await !lock.tryAcquire(on: second))
+        #expect(try await lock.release(on: first))
+        #expect(try await lock.tryAcquire(on: second))
+
+        await second.close()
+        // The server ends the closed session, and with it the lock, shortly after the close.
+        var acquired = false
+        for _ in 0..<50 where !acquired {
+            acquired = try await lock.tryAcquire(on: first)
+            if !acquired { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        #expect(acquired)
+        await first.close()
+    }
+
+    @Test(.timeLimit(.minutes(1))) func notificationsArriveUntilTheConnectionDrops() async throws {
+        let db = try testDatabase()
+        let channel = "dbkit_test_notifications_until_drop"
+        let listener = try await db.dedicatedConnection()
+        try await listener.listen(on: channel) { notifications in
+            try await db.notify(channel, payload: "hello")
+            for try await notification in notifications {
+                #expect(notification.payload == "hello")
+                break
+            }
+
+            let listenerPID = try await backendPID(on: listener)
+            try await db.query("SELECT pg_terminate_backend(\(listenerPID))")
+            await #expect(throws: PSQLError.self) {
+                for try await _ in notifications {}
+            }
+        }
+        await listener.close()
+    }
+
+    /// A notification sent in a transaction arrives when it commits and never when it rolls back. Listening ends when
+    /// the closure returns.
+    @Test(.timeLimit(.minutes(1))) func notificationsInATransactionArriveOnCommitAndListeningEndsWithTheClosure() async throws {
+        let db = try testDatabase()
+        let channel = "dbkit_test_transaction_notifications"
+        let listener = try await db.dedicatedConnection()
+        try await listener.listen(on: channel) { notifications in
+            struct Abort: Error {}
+            await #expect(throws: Abort.self) {
+                try await db.transaction { tx in
+                    try await tx.notify(channel, payload: "rolled back")
+                    throw Abort()
+                }
+            }
+            try await db.transaction { tx in try await tx.notify(channel, payload: "committed") }
+            // A session hears its own notifications; the payload defaults to empty.
+            try await listener.notify(channel)
+
+            var payloads: [String] = []
+            for try await notification in notifications {
+                payloads.append(notification.payload)
+                if payloads.count == 2 { break }
+            }
+            #expect(payloads == ["committed", ""])
+        }
+        #expect(try await listener.query("SELECT pg_listening_channels()").collect().isEmpty)
+        await listener.close()
+    }
+
     /// PostgresNIO never answers a query sent on a closed connection, so without a check these wait forever.
     @Test func queriesOnALostConnectionThrow() async throws {
         let db = try testDatabase()
-        // Waits for slice 28: the same on a dedicated connection, for `ping()`, `AdvisoryLock.tryAcquire` and `query`.
+        let connection = try await db.dedicatedConnection()
+        try await connection.ping()
+        let pid = try await backendPID(on: connection)
+        try await db.query("SELECT pg_terminate_backend(\(pid))")
+        // The close may still be on its way, so this reports the server's error or the closed connection.
+        await #expect(throws: (any Error).self) { try await connection.ping() }
+        try await Task.sleep(for: .milliseconds(100))
+        await #expect(throws: DBKitError.connectionClosed) { try await connection.ping() }
+        await #expect(throws: DBKitError.connectionClosed) {
+            try await AdvisoryLock("dbkit_test:queries-on-a-lost-connection").tryAcquire(on: connection)
+        }
+        await #expect(throws: DBKitError.connectionClosed) { try await connection.query("SELECT 1") }
+        await connection.close()
+
         let error = try await #require(throws: DBKitError.self) {
             try await db.transaction { tx in
                 let pid = try await tx.query("SELECT pg_backend_pid()").collect().first?.decode(Int32.self)
@@ -1065,12 +1201,16 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
                 )
                 """)
             try await tx.query("CREATE TEMP TABLE deliveries (id BIGSERIAL PRIMARY KEY, state delivery_state NOT NULL)")
-            // Waits for slice 28: `updatedAt: Date(timeIntervalSince1970: 0)` on the second row, and reading both rows back
-            // to check that `nil` writes DEFAULT per row, next to an explicit value in the same multi-row insert.
+            // `nil` writes DEFAULT per row, next to an explicit value in the same multi-row insert.
             try await TaskModel.insert([
                 TaskModel.Insert(projectID: 1, title: "t", state: .pendingReview, previousState: nil),
-                TaskModel.Insert(projectID: 1, title: "old", state: .completed, previousState: nil),
+                TaskModel.Insert(
+                    projectID: 1, title: "old", state: .completed, previousState: nil, updatedAt: Date(timeIntervalSince1970: 0)),
             ]).execute(on: tx)
+            let fresh = try await TaskModel.query().filter(TaskModel.title == "t").first(on: tx)
+            let old = try await TaskModel.query().filter(TaskModel.title == "old").first(on: tx)
+            #expect(fresh.map { abs($0.updatedAt.timeIntervalSinceNow) < 60 } == true && fresh?.attempts == 0)
+            #expect(old?.updatedAt == Date(timeIntervalSince1970: 0))
             let task = try await TaskModel.update().set(TaskModel.state, to: .completed).set(TaskModel.previousState, to: .pendingReview)
                 .filter(TaskModel.state.in([.pendingReview, .inProgress])).returningAll().first(on: tx)
             #expect(task?.state == .completed && task?.previousState == .pendingReview)
@@ -1262,6 +1402,165 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             #expect(least == nil)
             #expect(discount == 1.5)
             #expect(abs(today.timeIntervalSinceNow) < 2 * 86_400)
+        }
+    }
+
+    /// The schemas and their tables vanish with the rolled-back transaction, as `CREATE SCHEMA` is transactional.
+    /// `app.users` refers to the temp table `users` of the same name, which its relation joins therefore alias.
+    @Test func schemaQualifiedTablesQueryLoadAndMutateAcrossSchemas() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE SCHEMA app")
+            try await tx.query("CREATE SCHEMA blog")
+            try await tx.query("CREATE TABLE app.users (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, legacy_id BIGINT)")
+            try await tx.query("CREATE TABLE blog.posts (id BIGSERIAL PRIMARY KEY, author_id BIGINT NOT NULL, title TEXT NOT NULL)")
+            try await createUsers(on: tx)
+            let legacy = try #require(
+                try await UserModel.insert(UserModel.Insert(name: "Alex (legacy)", email: "alex@example.com")).returningAll().first(on: tx))
+            let users = try await AppUserModel.insert([
+                AppUserModel.Insert(name: "Alex", legacyID: legacy.id), AppUserModel.Insert(name: "Sam"),
+            ])
+            .returningAll().all(on: tx)
+            try await BlogPostModel.insert([
+                BlogPostModel.Insert(authorID: users[0].id, title: "Hello"),
+                BlogPostModel.Insert(authorID: users[0].id, title: "Again"),
+                BlogPostModel.Insert(authorID: users[1].id, title: "Hi"),
+            ])
+            .execute(on: tx)
+
+            let helloAuthors = try await AppUserModel.query().join(\.posts).filter(BlogPostModel.title == "Hello").forUpdate().all(on: tx)
+            #expect(helloAuthors.map(\.name) == ["Alex"])
+            let withLegacy = try await AppUserModel.query().filter(AppUserModel.Relations.legacy.email == "alex@example.com").all(on: tx)
+            #expect(withLegacy.map(\.name) == ["Alex"])
+
+            let posts = try await BlogPostModel.query()
+                .with(\.author, .joined) { $0.with(\.legacy, .joined) }
+                .orderBy(BlogPostModel.id.asc)
+                .all(on: tx)
+            #expect(posts.map { $0.author?.name } == ["Alex", "Alex", "Sam"])
+            #expect(posts.map { $0.author?.legacy?.name } == ["Alex (legacy)", "Alex (legacy)", nil])
+            let authors = try await AppUserModel.query().with(\.posts).orderBy(AppUserModel.name.asc).all(on: tx)
+            #expect(authors.map { $0.posts.map(\.title).sorted() } == [["Again", "Hello"], ["Hi"]])
+
+            var alex = users[0].active()
+            alex.name = "Alexander"
+            #expect(try await alex.update(on: tx).name == "Alexander")
+            let renamed = try await BlogPostModel.update()
+                .set(BlogPostModel.title, to: "Bye")
+                .whereExists(
+                    AppUserModel.query().select(AppUserModel.id).filter(
+                        AppUserModel.id == BlogPostModel.authorID && AppUserModel.name == "Sam")
+                )
+                .execute(on: tx)
+            #expect(renamed == 1)
+            #expect(try await users[1].delete(on: tx) == 1)
+            let others = AppUserModel.as("others")
+            let remaining = try await AppUserModel.query()
+                .whereExists(others.query().select(others.id).filter(others.id != AppUserModel.id))
+                .all(on: tx)
+            #expect(remaining.isEmpty)
+            #expect(try await BlogPostModel.query().orderBy(BlogPostModel.id.asc).all(on: tx).map(\.title) == ["Hello", "Again", "Bye"])
+        }
+    }
+}
+
+/// The kit's migration tests, in the serialized suite of `MigrationsTests.swift`: every migration test shares the table
+/// `_dbkit_migrations`.
+extension MigrationsTests {
+    @Test func migrationsApplyOnceAndRejectEditedFiles() async throws {
+        try await withMigrations(cleanup: ["DROP FUNCTION IF EXISTS migrated_note_count", "DROP TABLE IF EXISTS migrated_notes"]) {
+            db, files in
+            // Semicolons in strings, escape strings, comments and function bodies don't end a statement.
+            try files.write(
+                """
+                CREATE TABLE migrated_notes (id BIGSERIAL PRIMARY KEY, body TEXT NOT NULL DEFAULT 'a;b'); -- c;d
+                COMMENT ON TABLE migrated_notes IS E'it\\'s; one statement';
+                CREATE FUNCTION migrated_note_count() RETURNS BIGINT AS $$ SELECT count(*) FROM migrated_notes; $$ LANGUAGE sql;
+                """, to: "0001_create_notes.sql")
+            try files.write("INSERT INTO migrated_notes DEFAULT VALUES", to: "0002_insert_note.sql")
+            try await db.migrate(files.directory)
+            try await db.migrate(files.directory)
+            for try await (body, count) in try await db.query("SELECT body, migrated_note_count() FROM migrated_notes").decode(
+                (String, Int64).self)
+            {
+                #expect(body == "a;b" && count == 1)
+            }
+
+            try files.write("INSERT INTO migrated_notes DEFAULT VALUES;", to: "0002_insert_note.sql")
+            await #expect(
+                throws: DBKitError.migrationFailed("0002_insert_note.sql changed after it was applied; add a new migration instead")
+            ) {
+                try await db.migrate(files.directory)
+            }
+        }
+    }
+
+    /// The failing file's transaction rolls back its first statement too. The files before it stay applied, and the
+    /// fixed file applies on the next run.
+    @Test func aFailingMigrationNamesItsFileAndLeavesNothingHalfApplied() async throws {
+        try await withMigrations(cleanup: ["DROP TABLE IF EXISTS half_applied_notes, half_applied_tags"]) { db, files in
+            try files.write("CREATE TABLE half_applied_notes (id BIGSERIAL PRIMARY KEY)", to: "1_create_notes.sql")
+            try files.write(
+                "CREATE TABLE half_applied_tags (id BIGSERIAL PRIMARY KEY); INSERT INTO half_applied_missing DEFAULT VALUES",
+                to: "2_create_tags.sql")
+            let error = try await #require(throws: DBKitError.self) { try await db.migrate(files.directory) }
+            #expect(error.description.hasPrefix("migration failed: 2_create_tags.sql: "))
+            #expect(try await tableExists("half_applied_notes", on: db))
+            #expect(try await !tableExists("half_applied_tags", on: db))
+            #expect(try await integer("SELECT count(*) FROM _dbkit_migrations", on: db) == 1)
+
+            try files.write("CREATE TABLE half_applied_tags (id BIGSERIAL PRIMARY KEY)", to: "2_create_tags.sql")
+            try await db.migrate(files.directory)
+            #expect(try await tableExists("half_applied_tags", on: db))
+        }
+    }
+
+    @Test func aDeletedAppliedMigrationFails() async throws {
+        try await withMigrations(cleanup: ["DROP TABLE IF EXISTS deleted_migration_notes"]) { db, files in
+            try files.write("CREATE TABLE deleted_migration_notes (id BIGSERIAL PRIMARY KEY)", to: "7_create_notes.sql")
+            try await db.migrate(files.directory)
+            try files.remove("7_create_notes.sql")
+            await #expect(throws: DBKitError.migrationFailed("version 7 is applied, but its file is missing")) {
+                try await db.migrate(files.directory)
+            }
+        }
+    }
+
+    /// Replicas that start together all succeed and apply each file once: the advisory lock makes the others wait,
+    /// then skip what the first applied.
+    @Test(.timeLimit(.minutes(1))) func replicasMigratingAtOnceApplyEachFileOnce() async throws {
+        try await withMigrations(cleanup: ["DROP TABLE IF EXISTS replica_migration_runs"]) { db, files in
+            try files.write(
+                """
+                CREATE TABLE replica_migration_runs (id BIGSERIAL PRIMARY KEY);
+                INSERT INTO replica_migration_runs DEFAULT VALUES;
+                DO $$ BEGIN PERFORM pg_sleep(0.2); END $$;
+                """, to: "1_record_run.sql")
+            try await withThrowingTaskGroup(of: Void.self) { replicas in
+                for _ in 0..<3 {
+                    replicas.addTask { try await db.migrate(files.directory) }
+                }
+                try await replicas.waitForAll()
+            }
+            #expect(try await integer("SELECT count(*) FROM replica_migration_runs", on: db) == 1)
+        }
+    }
+
+    /// Each file needs a version before its name, and a version of its own, which an `.up.sql` and a `.down.sql` file
+    /// of rust-dbkit's reversible migrations would share.
+    @Test func migrationFilesNeedAVersionOfTheirOwn() async throws {
+        try await withMigrations { db, files in
+            try files.write("CREATE TABLE unversioned_notes (id BIGSERIAL PRIMARY KEY)", to: "create_notes.sql")
+            await #expect(
+                throws: DBKitError.migrationFailed("create_notes.sql must be named <version>_<name>.sql, e.g. 0001_create_users.sql")
+            ) {
+                try await db.migrate(files.directory)
+            }
+
+            try files.remove("create_notes.sql")
+            try files.write("CREATE TABLE reversible_notes (id BIGSERIAL PRIMARY KEY)", to: "1_create_notes.up.sql")
+            try files.write("DROP TABLE reversible_notes", to: "1_create_notes.down.sql")
+            let error = try await #require(throws: DBKitError.self) { try await db.migrate(files.directory) }
+            #expect(error.description.hasSuffix(" share version 1"))
         }
     }
 }

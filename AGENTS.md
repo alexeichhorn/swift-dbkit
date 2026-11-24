@@ -40,6 +40,7 @@ Until `0.1.0`, the repo is rebuilt from an existing implementation, the kit. Its
 
 - `swift test` runs everything: unit tests, integration tests and compile-fail fixtures.
 - Integration tests read `DATABASE_URL` from the environment or from `.env`, and fail without it. They need PostgreSQL 16 or newer with pgvector 0.7 or newer.
+- Point `DATABASE_URL` only at a throwaway database. The tests create the `vector` extension, create and drop real tables named for their tests, and the migration tests drop `_dbkit_migrations`.
 - An integration test creates its tables as `TEMP` tables inside one transaction, so tests run in parallel and leave nothing behind. A test that needs several connections uses real tables named for that test and drops them.
 - A compile-fail fixture marks each line that must fail with `// error: <part of the message>`. `CompileFailTests` builds the fixture package once and fails on a marked line without that error and on an error without a mark. A fixture without marks must compile.
 - Test models carry the `Model` suffix (`UserModel`), as the docs do.
