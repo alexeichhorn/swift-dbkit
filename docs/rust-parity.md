@@ -25,6 +25,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - Row-value tuples take each column's own type, so integer literals, optional values and `nil` for nullable columns, and `SQL.row(…).in(…)` is `Bool?` when a column is nullable
 - Parentheses around a comparison used inside another comparison
 - `exists(subquery)` as a `Bool` expression
+- Table aliases, `Model.as(_:)`, so a subquery on the outer query's own table correlates with the outer row
 - Streaming of projections, grouping and aggregates
 - Schema-qualified tables, as an optional `schema:` argument on `@Model`
 - Property names starting with `__dbkit_` are reserved for generated code and rejected by `@Model`, so a property such as `_name` no longer clashes with the generated storage
@@ -128,3 +129,4 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `relation_state_into.rs::partial_unload_preserves_nested_loaded_relation_types` | Converting a loaded row to a type with fewer loaded relations is left out; a loaded row passes as the plain model and as any `With…` type, as `selectInLoadsSelfReferencesAndPassesAsWithTypes` checks. |
 | `ui/pass_relation_state_into_generic_names.rs` | Its relation names would clash with the generated conversion to fewer loaded relations, which is left out. |
 | `ui/pass_relation_state_into_shadowed_traits.rs` | Its types named `From` and `Into` would shadow the traits of the generated conversion to fewer loaded relations, which is left out. |
+| `subquery_sql.rs::exists_subquery_does_not_treat_dollar_digits_inside_quoted_identifier_as_bind_token` | rust-dbkit takes an alias as SQL text, which may be a quoted identifier, and rewrites a subquery's placeholders in that text. This port takes an alias as a name it quotes itself and renders a subquery's binds with the outer query's renderer, so no SQL text is scanned for placeholders. `existsSubqueryDoesNotTreatDollarSuffixInAliasAsBindToken` covers an alias with `$1`. |

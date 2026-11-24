@@ -242,7 +242,16 @@ class LeaseModel {
         var condition = Condition.any
         condition.add(UserModel.region == "us")
         condition.add(UserModel.region.isNull && UserModel.name == "Sam")
-        // Waits for slice 21: the empty `Condition.all` filters a `ProjectModel` query with a correlated `whereExists`.
+        let correlated = ProjectModel.query()
+            .whereExists(TaskModel.query().select(TaskModel.id).filter(TaskModel.projectID == ProjectModel.id))
+            .filter(Condition.all)
+            .render()
+        #expect(
+            correlated.sql
+                == #"SELECT "projects".* FROM "projects" WHERE EXISTS (SELECT "tasks"."id" FROM "tasks" WHERE "tasks"."project_id" = "projects"."id")"#
+        )
+        #expect(correlated.binds.isEmpty)
+        // Waits for slice 26: `&& TaskModel.state == .inProgress` in the subquery's filter, bound as `$1::task_state`.
         #expect(UserModel.query().filter(Condition.all).render().sql == #"SELECT "users".* FROM "users""#)
         let rendered = UserModel.query().filter(condition).render()
         #expect(
@@ -250,6 +259,78 @@ class LeaseModel {
                 == #"SELECT "users".* FROM "users" WHERE ("users"."region" = $1 OR ("users"."region" IS NULL AND "users"."name" = $2))"#
         )
         #expect(rendered.binds.map(\.description) == ["us", "Sam"])
+    }
+
+    /// `EXISTS` is never NULL, so `SQL.exists` is `Expr<Bool>` and combines with `&&`, `||` and `!` like any predicate.
+    /// A model query works as the subquery as well as a projection.
+    @Test func existsIsABoolExpression() {
+        let hasMilk: Expr<Bool> = SQL.exists(
+            TodoModel.query().select(TodoModel.id).filter(TodoModel.userID == UserModel.id).filter(TodoModel.title == "milk")
+        )
+        let hasTodos: Expr<Bool> = SQL.exists(TodoModel.query().filter(TodoModel.userID == UserModel.id))
+        let milkOrSam: Expr<Bool> = hasMilk || UserModel.name == "Sam"
+        let idleOthers: Expr<Bool> = !hasTodos && UserModel.name != "Sam"
+        let rendered = UserModel.query().filter(milkOrSam).filter(idleOthers).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users".* FROM "users" WHERE (EXISTS (SELECT "todos"."id" FROM "todos" WHERE "todos"."user_id" = "users"."id" AND "todos"."title" = $1) OR "users"."name" = $2) AND (NOT (EXISTS (SELECT "todos".* FROM "todos" WHERE "todos"."user_id" = "users"."id")) AND "users"."name" <> $3)"#
+        )
+        #expect(rendered.binds.map(\.description) == ["milk", "Sam", "Sam"])
+    }
+
+    /// `SQL.exists` is selected as a `Bool` column and joins on it, correlated with the row of the enclosing query.
+    @Test func existsInProjectionsAndJoinConditions() {
+        let hasMilk = SQL.exists(
+            TodoModel.query().select(TodoModel.id).filter(TodoModel.userID == UserModel.id).filter(TodoModel.title == "milk")
+        )
+        let projection: Projection<String, Bool> = UserModel.query()
+            .select(UserModel.name.as("name"), hasMilk.as("has_milk"))
+            .filter(UserModel.region == "us")
+        let selected = projection.render()
+        #expect(
+            selected.sql
+                == #"SELECT "users"."name" AS "name", EXISTS (SELECT "todos"."id" FROM "todos" WHERE "todos"."user_id" = "users"."id" AND "todos"."title" = $1) AS "has_milk" FROM "users" WHERE "users"."region" = $2"#
+        )
+        #expect(selected.binds.map(\.description) == ["milk", "us"])
+
+        let tagged = SQL.exists(
+            TodoTagModel.query().select(TodoTagModel.tagID).filter(TodoTagModel.todoID == TodoModel.id).filter(TodoTagModel.tagID == 3)
+        )
+        let joined = TodoModel.query()
+            .join(UserModel.self, on: UserModel.id == TodoModel.userID && tagged)
+            .filter(TodoModel.title == "milk")
+            .render()
+        #expect(
+            joined.sql
+                == #"SELECT "todos".* FROM "todos" JOIN "users" ON ("users"."id" = "todos"."user_id" AND EXISTS (SELECT "todo_tags"."tag_id" FROM "todo_tags" WHERE "todo_tags"."todo_id" = "todos"."id" AND "todo_tags"."tag_id" = $1)) WHERE "todos"."title" = $2"#
+        )
+        #expect(joined.binds.map(\.description) == ["3", "milk"])
+    }
+
+    /// A subquery takes its own `whereExists` and `whereNotExists`, whose columns of each enclosing model refer to that
+    /// model's row. Binds are numbered in the order they appear, across all levels.
+    @Test func nestedExistsNumbersBindsAcrossLevels() {
+        let rendered = UserModel.query()
+            .filter(UserModel.region == "us")
+            .whereExists(
+                TodoModel.query()
+                    .select(TodoModel.id)
+                    .filter(TodoModel.userID == UserModel.id)
+                    .filter(TodoModel.title == "milk")
+                    .whereNotExists(
+                        TodoTagModel.query()
+                            .select(TodoTagModel.tagID)
+                            .filter(TodoTagModel.todoID == TodoModel.id)
+                            .filter(TodoTagModel.tagID == 3)
+                    )
+            )
+            .filter(UserModel.name == "Sam")
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users".* FROM "users" WHERE "users"."region" = $1 AND EXISTS (SELECT "todos"."id" FROM "todos" WHERE "todos"."user_id" = "users"."id" AND "todos"."title" = $2 AND NOT EXISTS (SELECT "todo_tags"."tag_id" FROM "todo_tags" WHERE "todo_tags"."todo_id" = "todos"."id" AND "todo_tags"."tag_id" = $3)) AND "users"."name" = $4"#
+        )
+        #expect(rendered.binds.map(\.description) == ["us", "milk", "3", "Sam"])
     }
 
     /// `TodoModel` stands in for the kit's `TaskModel`, whose enum columns arrive in slice 26.
@@ -569,7 +650,14 @@ class LeaseModel {
         #expect(update.sql == #"UPDATE "tasks" SET "attempts" = ("tasks"."attempts" + $1) WHERE "tasks"."id" = $2"#)
         #expect(update.binds.map(\.description) == ["1", "42"])
         // Waits for slice 26: the same update also setting the enum `state` to `.completed` and `previousState` to `nil`.
-        // Waits for slice 21: `TaskModel.delete().whereExists(…)` with a correlated `ProjectModel` subquery.
+        let delete = TaskModel.delete()
+            .whereExists(ProjectModel.query().select(ProjectModel.id).filter(ProjectModel.id == TaskModel.projectID))
+            .render()
+        #expect(
+            delete.sql
+                == #"DELETE FROM "tasks" WHERE EXISTS (SELECT "projects"."id" FROM "projects" WHERE "projects"."id" = "tasks"."project_id")"#
+        )
+        #expect(delete.binds.isEmpty)
     }
 
     /// A condition nests in another through its predicate, which updates and deletes filter by once unwrapped. A row

@@ -16,6 +16,21 @@ class MutationUserModel {
     var name: String
 }
 
+/// rust-dbkit's `teams` of `mutation_sql.rs`, named apart from the `TeamModel` of the integration tests.
+@Model(table: "teams")
+class MutationTeamModel {
+    @Key var id: Int64
+    var ownerID: Int64
+    var state: String
+}
+
+@Model(table: "team_members")
+class MutationTeamMemberModel {
+    @Key var id: Int64
+    var teamID: Int64
+    var role: String
+}
+
 @Suite struct MutationSQLTests {
     @Test func compilesInsertReturningAll() {
         let rendered = MutationEmailUserModel.insert(MutationEmailUserModel.Insert(email: "a@b.com")).returningAll().render()
@@ -169,8 +184,40 @@ class MutationUserModel {
         #expect(rendered.binds.map(\.description) == ["new@b.com", "1"])
     }
 
-    // Waits for slice 21: `compilesUpdateWhereExistsWithCorrelatedSubqueryAndReturningAll` and
-    // `compilesUpdateWhereNotExistsWithCorrelatedSubquery`.
+    @Test func compilesUpdateWhereExistsWithCorrelatedSubqueryAndReturningAll() {
+        let subquery = MutationTeamModel.query()
+            .select(MutationTeamModel.id)
+            .filter(MutationTeamModel.id == MutationTeamMemberModel.teamID)
+            .filter(MutationTeamModel.ownerID == 7)
+            .filter(MutationTeamModel.state == "active")
+        let rendered = MutationTeamMemberModel.update()
+            .set(MutationTeamMemberModel.role, to: "observer")
+            .whereExists(subquery)
+            .returningAll()
+            .render()
+        #expect(
+            rendered.sql
+                == #"UPDATE "team_members" SET "role" = $1 WHERE EXISTS (SELECT "teams"."id" FROM "teams" WHERE "teams"."id" = "team_members"."team_id" AND "teams"."owner_id" = $2 AND "teams"."state" = $3) RETURNING *"#
+        )
+        #expect(rendered.binds.map(\.description) == ["observer", "7", "active"])
+    }
+
+    @Test func compilesUpdateWhereNotExistsWithCorrelatedSubquery() {
+        let subquery = MutationTeamMemberModel.query()
+            .select(MutationTeamMemberModel.id)
+            .filter(MutationTeamMemberModel.teamID == MutationTeamModel.id)
+            .filter(MutationTeamMemberModel.role == "lead")
+        let rendered = MutationTeamModel.update()
+            .set(MutationTeamModel.state, to: "inactive")
+            .whereNotExists(subquery)
+            .filter(MutationTeamModel.ownerID == 9)
+            .render()
+        #expect(
+            rendered.sql
+                == #"UPDATE "teams" SET "state" = $1 WHERE NOT EXISTS (SELECT "team_members"."id" FROM "team_members" WHERE "team_members"."team_id" = "teams"."id" AND "team_members"."role" = $2) AND "teams"."owner_id" = $3"#
+        )
+        #expect(rendered.binds.map(\.description) == ["inactive", "lead", "9"])
+    }
 
     @Test func compilesDeleteWithFilter() {
         let rendered = MutationUserModel.delete().filter(MutationUserModel.id == 42).render()
@@ -178,6 +225,30 @@ class MutationUserModel {
         #expect(rendered.binds.map(\.description) == ["42"])
     }
 
-    // Waits for slice 21: `compilesDeleteWhereExistsWithCorrelatedSubqueryAndReturningAll` and
-    // `compilesDeleteWhereNotExistsWithCorrelatedSubquery`.
+    @Test func compilesDeleteWhereExistsWithCorrelatedSubqueryAndReturningAll() {
+        let subquery = MutationTeamModel.query()
+            .select(MutationTeamModel.id)
+            .filter(MutationTeamModel.id == MutationTeamMemberModel.teamID)
+            .filter(MutationTeamModel.ownerID == 11)
+            .filter(MutationTeamModel.state == "archived")
+        let rendered = MutationTeamMemberModel.delete().whereExists(subquery).returningAll().render()
+        #expect(
+            rendered.sql
+                == #"DELETE FROM "team_members" WHERE EXISTS (SELECT "teams"."id" FROM "teams" WHERE "teams"."id" = "team_members"."team_id" AND "teams"."owner_id" = $1 AND "teams"."state" = $2) RETURNING *"#
+        )
+        #expect(rendered.binds.map(\.description) == ["11", "archived"])
+    }
+
+    @Test func compilesDeleteWhereNotExistsWithCorrelatedSubquery() {
+        let subquery = MutationTeamMemberModel.query()
+            .select(MutationTeamMemberModel.id)
+            .filter(MutationTeamMemberModel.teamID == MutationTeamModel.id)
+            .filter(MutationTeamMemberModel.role == "maintainer")
+        let rendered = MutationTeamModel.delete().whereNotExists(subquery).filter(MutationTeamModel.ownerID == 3).render()
+        #expect(
+            rendered.sql
+                == #"DELETE FROM "teams" WHERE NOT EXISTS (SELECT "team_members"."id" FROM "team_members" WHERE "team_members"."team_id" = "teams"."id" AND "team_members"."role" = $1) AND "teams"."owner_id" = $2"#
+        )
+        #expect(rendered.binds.map(\.description) == ["maintainer", "3"])
+    }
 }

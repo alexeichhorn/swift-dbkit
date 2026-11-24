@@ -118,6 +118,12 @@ class TaskModel {
     var attempts: Int32 = 0
 }
 
+@Model(table: "projects")
+class ProjectModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+}
+
 /// rust-dbkit's `records` of `arithmetic_support.rs` and `arithmetic_integration.rs`.
 @Model(table: "records")
 class RecordModel {
