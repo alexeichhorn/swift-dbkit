@@ -31,6 +31,32 @@ func runApp(databaseURL: String) async throws {
 
 Outside a service group, run it in a task: `async let pool: Void = db.run()`, cancelling the task to shut down.
 
+## Migrations
+
+Migrations are plain SQL files named `<version>_<name>.sql`, applied in version order:
+
+```text
+Migrations/
+  0001_create_users.sql
+  0002_add_todos.sql
+```
+
+```swift
+// Package.swift: resources: [.copy("Migrations")]
+try await db.migrate(Bundle.module.url(forResource: "Migrations", withExtension: nil)!)
+```
+
+- Versions compare as numbers, so `10_…` runs after `9_…`. Each file needs a version of its own.
+- Each pending file runs in its own transaction and is recorded in `_dbkit_migrations` with a checksum.
+- Migrations are forward-only. A run fails when an applied file was edited or deleted; fix mistakes with a new file.
+- An advisory lock lets several replicas run `migrate` at startup; the first applies, the others wait and skip.
+- A file may hold several statements. They're split at top-level semicolons; semicolons in quotes, escape strings
+  (`E'…'`), `$$` function bodies and comments are fine.
+- A failed migration throws `DBKitError.migrationFailed` with the file name and the PostgreSQL error. The failing file
+  leaves nothing behind, and the files before it stay applied.
+
+Keep the tables in sync with your `@Model` types; DBKit doesn't create or check them.
+
 ## Other PostgresNIO Libraries
 
 Libraries such as `swift-jobs-postgres` take the underlying pool, `db.client`, so they share connections with DBKit.
@@ -64,11 +90,60 @@ let users = try await db.transaction { tx in
 `setLocal` uses `set_config(name, value, true)`, so the setting ends with the transaction instead of leaking to
 the next user of the pooled connection.
 
+## Dedicated Connections
+
+A dedicated connection is opened with the pool's URL and TLS settings but isn't part of the pool. It lives until
+you close it, so it can hold session state that must not leak back into a pool:
+
+```swift
+let connection = try await db.dedicatedConnection()
+let users = try await UserModel.query().all(on: connection)
+await connection.close()
+```
+
+Closing releases its advisory locks and ends its notification sequences. `connection.ping()` throws once the
+connection is lost, and its locks with it; queries on a lost connection throw `DBKitError.connectionClosed`. A
+`Database(client:logger:)` has no URL, so its `dedicatedConnection()` throws `DBKitError.missingDatabaseURL`.
+
+## Advisory Locks
+
+Session advisory locks by name, to make sure only one process does a piece of work:
+
+```swift
+let lock = AdvisoryLock("import:\(importID)")
+if try await lock.tryAcquire(on: connection) {
+    try await runImport(importID)
+    try await lock.release(on: connection)
+}
+```
+
+`tryAcquire` never waits: it returns `false` when another session holds the lock. The lock stays with the
+connection until `release` or `close()`; taking it twice needs two releases. PostgreSQL derives the lock key
+from the name with `hashtextextended(name, 0)`.
+
+## LISTEN / NOTIFY
+
+`notify` runs on any executor; in a transaction the notification is delivered on commit. Listening needs a
+dedicated connection:
+
+```swift
+try await db.notify("imports", payload: "\(importID)")
+
+try await connection.listen(on: "imports") { notifications in
+    for try await notification in notifications {
+        print(notification.payload)
+    }
+}
+```
+
+Listening stops when the closure returns. Notifications sent while nobody listens are lost. The sequence throws when
+the connection drops; open a new dedicated connection and listen again.
+
 ## Executors
 
-Every query method takes `some DatabaseExecutor`: a `Database` or a `Transaction`. Only `stream(on:)` is narrower: it
-takes a `Database` or a `Transaction` itself, not the protocol. Write helpers against the protocol to use them with
-both:
+Every query method takes `some DatabaseExecutor`: a `Database`, a `Transaction` or a `DedicatedConnection`. Only
+`stream(on:)` is narrower and takes a `Database` or a `Transaction`. Write helpers against the protocol to use them
+with all three:
 
 ```swift
 func activeUsers(on executor: some DatabaseExecutor) async throws -> [UserModel] {

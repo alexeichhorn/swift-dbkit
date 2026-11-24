@@ -1,9 +1,22 @@
 # DBKit
 
 A small, Postgres-first async ORM for Swift with typed columns, typed expressions and type-level loaded
-relations.
+relations. It's the Swift port of [rust-dbkit](https://github.com/alexeichhorn/rust-dbkit), built on PostgresNIO and
+framework-independent.
 
-The package is being built; its guides arrive feature by feature.
+## Usage
+
+```swift
+.package(url: "https://github.com/alexeichhorn/swift-dbkit.git", branch: "main"),
+// target dependency:
+.product(name: "DBKit", package: "swift-dbkit"),
+```
+
+```swift
+import DBKit
+```
+
+`import DBKit` also re-exports PostgresNIO for raw SQL and `PostgresClient`.
 
 ## Quick Intro
 
@@ -76,7 +89,8 @@ print(rendered.binds.map(\.description))
 `@Model` generates a static typed column per property (`TodoModel.userID` is a `Column<TodoModel, Int64>`)
 and one entry per relation in `TodoModel.Relations` (`TodoModel.Relations.user.name` is a relation path for filters).
 Column names default to the snake_case property name (`userID` → `user_id`); override with `@ColumnName("type")`.
-Property names starting with `__dbkit_` are reserved for the code `@Model` generates.
+Property names starting with `__dbkit_` are reserved for the code `@Model` generates. A table in a PostgreSQL schema
+takes `@Model(table: "users", schema: "app")`; see [Tables In Other Schemas](docs/querying.md#tables-in-other-schemas).
 
 Required and nullable columns stay distinct: `nil` and optional values are accepted only where the property is
 optional, and a comparison is nullable when an operand is (`Expr<Bool?>` instead of `Expr<Bool>`). Comparing a column
@@ -110,6 +124,16 @@ try await user.delete(on: db)
 
 Use the `update()` / `delete()` builders for bulk or conditional mutations.
 
+A violated unique constraint surfaces as a `PSQLError` that names it:
+
+```swift
+do {
+    try await UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com")).execute(on: db)
+} catch let error as PSQLError where error.isUniqueViolation(of: "users_email_key") {
+    // the email is taken
+}
+```
+
 ## Postgres Enums
 
 `@DatabaseEnum` stores a plain enum as a PostgreSQL enum type. Each label is the snake_case case name:
@@ -117,6 +141,36 @@ Use the `update()` / `delete()` builders for bulk or conditional mutations.
 ```swift
 @DatabaseEnum("task_state")
 enum TaskState { case pendingReview, inProgress, completed }   // pending_review, in_progress, completed
+```
+
+## Connections
+
+The pool size is a range: it keeps the lower bound open and grows to the upper bound.
+
+```swift
+let db = try Database(url: "postgres://app:secret@localhost:5432/app", connections: 3...10)
+```
+
+A dedicated connection lives outside the pool until you close it. It holds the session state that must not leak back
+into a pool: advisory locks and `LISTEN`.
+
+```swift
+let connection = try await db.dedicatedConnection()
+
+let lock = AdvisoryLock("import:\(importID)")
+if try await lock.tryAcquire(on: connection) {   // never waits
+    …
+    try await lock.release(on: connection)
+}
+
+try await db.notify("imports", payload: "\(importID)")           // on any executor
+try await connection.listen(on: "imports") { notifications in
+    for try await notification in notifications {
+        print(notification.payload)
+    }
+}
+
+await connection.close()
 ```
 
 ## More Docs
@@ -128,6 +182,12 @@ enum TaskState { case pendingReview, inProgress, completed }   // pending_review
 - [PostgreSQL string functions](docs/string-functions.md)
 - [Postgres types](docs/postgres-types.md)
 - [Database](docs/database.md)
+
+## Differences From rust-dbkit
+
+Swift idioms replace Rust's: operators (`==`, `&&`, `??`) instead of `eq` / `and` / `unwrap_or`, key paths for
+relations (`.with(\.todos)`), and models as classes. [Parity with rust-dbkit](docs/rust-parity.md) lists every other
+difference, what is left out and why.
 
 ## License
 

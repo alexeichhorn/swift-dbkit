@@ -46,6 +46,36 @@ let rendered = todos.render()
 // rendered.binds: 7, "Buy%"
 ```
 
+## Tables In Other Schemas
+
+`schema:` puts a model's table in a PostgreSQL schema. Without it, PostgreSQL finds the table on its search path, as
+before:
+
+```swift
+@Model(table: "users", schema: "app")
+class AppUserModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+    var legacyID: Int64?
+    @BelongsTo(key: "legacyID") var legacy: UserModel?
+}
+
+let rendered = AppUserModel.query().filter(AppUserModel.name == "Alex").render()
+// SELECT "app"."users".* FROM "app"."users" WHERE "app"."users"."name" = $1
+```
+
+Statements name the table `"app"."users"` and qualify its columns the same way, also in joins, joined loads,
+subqueries and mutations. A table alias replaces both: `FROM "app"."users" AS "author"` and `"author"."id"`.
+
+PostgreSQL tells the tables of a statement apart by their bare names, also across schemas:
+
+- A row lock with joins is scoped to the bare name, `FOR UPDATE OF "users"`, since PostgreSQL rejects a qualified name
+  there.
+- A relation join to a table whose bare name is already in use takes an alias of the base table's name and the relation
+  path, as a self-reference does: `AppUserModel.Relations.legacy` joins `LEFT JOIN "users" AS "users.legacy"`.
+- A custom `join(_:on:)` keeps the table's name, so joining `UserModel` to a query of `AppUserModel` that way is
+  ambiguous and PostgreSQL rejects it. Join it through a relation instead, which takes the alias.
+
 ## Row-Value Filters
 
 ```swift
@@ -112,7 +142,7 @@ A cursor lives in a transaction. On a `Database` the stream takes one pooled con
 transaction on it and gives the connection back when it ends or is dropped; other queries on the pool use other
 connections meanwhile. Inside `db.transaction` the stream reads on the transaction's connection and only closes its
 cursor: the transaction stays open, and it answers other queries while the loop runs. `stream(on:)` takes one of
-these two.
+these two; streaming on a `DedicatedConnection` does not compile.
 
 ## Row Locking
 

@@ -18,6 +18,29 @@ let inserted = try await UserModel.insert(UserModel.Insert(name: "Sam", email: "
 
 `execute(on:)` returns the number of affected rows; `returningAll()` returns the rows themselves.
 
+### Database Defaults
+
+Mark a column the database fills, such as `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, with `@DatabaseDefault`.
+Its `Insert` field is optional; `nil` writes SQL `DEFAULT`, row by row, so one multi-row insert can mix both:
+
+```swift
+@Model(table: "events")
+class EventModel {
+    @Key @AutoIncrement var id: Int64
+    var name: String
+    @DatabaseDefault var createdAt: Date
+}
+
+try await EventModel.insert([
+    EventModel.Insert(name: "now"),                                          // created_at = DEFAULT
+    EventModel.Insert(name: "backfill", createdAt: Date(timeIntervalSince1970: 0)),
+]).execute(on: db)
+```
+
+Prefer a Swift default (`var createdAt: Date = .now`) unless the database must own the value, e.g. because other
+writers insert rows too. DBKit doesn't manage the schema: without the `DEFAULT` in the migration, `nil` inserts
+`NULL`.
+
 ## Update
 
 For one loaded row, use `active()`. It tracks the columns you assign, so the update writes only those, by
@@ -34,8 +57,8 @@ The update filters by the key the row was loaded with, so assigning a key column
 nothing assigned, `update(on:)` sends no query and returns the row unchanged. When no row matches the key, it throws
 `DBKitError.rowNotFound`.
 
-Use the update builder for bulk or conditional updates. `set(_:to:)` takes a value of the column's type or an
-expression:
+Use the update builder for bulk or conditional updates. `set(_:to:)` takes a value of the column's type (`nil` only
+for nullable columns) or an expression:
 
 ```swift
 @Model(table: "jobs")
@@ -51,6 +74,7 @@ class JobModel {
 let retried = try await JobModel.update()
     .set(JobModel.state, to: "queued")
     .set(JobModel.attempts, to: JobModel.attempts + 1)
+    .set(JobModel.error, to: nil)
     .filter(JobModel.state == "failed")
     .returningAll()
     .all(on: db)
@@ -133,4 +157,15 @@ Both column lists of `onConflict` can also be tuples, so one list can be kept in
 let lineKey = (OrderLineModel.orderID, OrderLineModel.lineID)
 let insert = OrderLineModel.insert(OrderLineModel.Insert(orderID: 7, lineID: 9, note: "New"))
     .onConflict(lineKey, doUpdate: OrderLineModel.note)
+```
+
+Without a conflict clause the violation surfaces as a `PSQLError`. `isUniqueViolation(of:)` checks for SQLSTATE 23505
+and, when given, the violated constraint; `constraintName` holds the name the server reported:
+
+```swift
+do {
+    try await UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com")).execute(on: db)
+} catch let error as PSQLError where error.isUniqueViolation(of: "users_email_key") {
+    // the email is taken
+}
 ```
