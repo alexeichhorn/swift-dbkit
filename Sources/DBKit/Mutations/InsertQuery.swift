@@ -1,11 +1,41 @@
 /// An `INSERT` of one or more rows, created by `Model.insert(_:)`.
 public struct InsertQuery<Row: Model>: Sendable where Row.Base == Row {
     let rows: [[ColumnValue]]
+    var conflict: SQLNode?
+
+    /// `ON CONFLICT (target) DO NOTHING`. Without columns, any unique violation is ignored.
+    public func onConflictDoNothing<each V: SQLType>(_ target: repeat Column<Row, each V>) -> Self {
+        var copy = self
+        copy.conflict = .raw("ON CONFLICT \(conflictTarget(repeat each target))DO NOTHING")
+        return copy
+    }
+
+    /// `ON CONFLICT (target) DO UPDATE SET column = EXCLUDED.column` for each column in `update`.
+    public func onConflict<each T: SQLType, each U: SQLType>(
+        _ target: repeat Column<Row, each T>, doUpdate update: repeat Column<Row, each U>
+    )
+        -> Self
+    {
+        var assignments: [String] = []
+        for column in repeat each update { assignments.append("\(quoted(column.name)) = EXCLUDED.\(quoted(column.name))") }
+        var copy = self
+        copy.conflict = .raw("ON CONFLICT \(conflictTarget(repeat each target))DO UPDATE SET \(assignments.joined(separator: ", "))")
+        return copy
+    }
+
+    /// The same upsert with the columns as tuples, so a column list can be kept in a constant and reused:
+    /// `let updates = (UserModel.name, UserModel.region)`, then `.onConflict(UserModel.email, doUpdate: updates)`.
+    @_disfavoredOverload
+    public func onConflict<each T: SQLType, each U: SQLType>(
+        _ target: (repeat Column<Row, each T>), doUpdate update: (repeat Column<Row, each U>)
+    ) -> Self {
+        onConflict(repeat each target, doUpdate: repeat each update)
+    }
 
     /// Returns the inserted rows (`RETURNING *`).
     public func returningAll() -> Returning<Row> { Returning(statement: statement) }
 
-    /// Runs the insert and returns the number of inserted rows.
+    /// Runs the insert and returns the number of inserted (or upserted) rows.
     @discardableResult
     public func execute(on executor: some DatabaseExecutor) async throws -> Int {
         guard !rows.isEmpty else { return 0 }
@@ -22,8 +52,15 @@ public struct InsertQuery<Row: Model>: Sendable where Row.Base == Row {
             let values = rows.map { row in "(" + row.map { renderer.render($0.node) }.joined(separator: ", ") + ")" }
             var sql = "INSERT INTO \(quoted(Row.schema.table)) (\(columns.map(quoted).joined(separator: ", "))) VALUES "
             sql += values.joined(separator: ", ")
+            if let conflict { sql += " " + renderer.render(conflict) }
             return sql
         }
+    }
+
+    private func conflictTarget<each V>(_ target: repeat Column<Row, each V>) -> String {
+        var columns: [String] = []
+        for column in repeat each target { columns.append(quoted(column.name)) }
+        return columns.isEmpty ? "" : "(\(columns.joined(separator: ", "))) "
     }
 }
 
@@ -119,7 +156,7 @@ public struct Returning<Row: Model>: Sendable where Row.Base == Row {
         try await executor.rows(render()) { try Row.decodeBase(from: RowReader(row: $0)) }
     }
 
-    /// The first affected row, or `nil` when none was affected.
+    /// The first affected row, or `nil` when none was affected (e.g. after `onConflictDoNothing`).
     public func first(on executor: some DatabaseExecutor) async throws -> Row? {
         try await all(on: executor).first
     }
