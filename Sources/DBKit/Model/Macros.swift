@@ -19,7 +19,9 @@
 /// ```
 @attached(member, names: arbitrary)
 @attached(memberAttribute)
-@attached(extension, conformances: Model, Sendable, names: named(Base), named(schema), named(decodeBase), named(columnValues))
+@attached(
+    extension, conformances: Model, Sendable, names: named(Base), named(schema), named(decodeBase), named(columnName), named(base),
+    named(columnValues))
 public macro Model(table: String? = nil) = #externalMacro(module: "DBKitMacros", type: "ModelMacro")
 
 /// Makes a column read-only. `@Model` adds it to every column; not meant to be written by hand.

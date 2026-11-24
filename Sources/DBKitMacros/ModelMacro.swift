@@ -130,6 +130,7 @@ private struct Generator {
 
     func conformance(for type: String) -> String {
         let decodeArguments = model.fields.map { "\($0.name): try row.decode((\($0.type)).self, \"\($0.column)\")" }
+        let keyPaths = model.fields.map { "\\.\($0.name): \"\($0.column)\"" }
         let columnValues = model.fields.map { "DBKit.ColumnValue(\"\($0.column)\", \($0.name))" }
         return """
             extension \(type): DBKit.Model, @unchecked Sendable {
@@ -146,6 +147,13 @@ private struct Generator {
                 \(access)static func decodeBase(from row: DBKit.RowReader) throws -> \(name) {
                     \(name)(\(decodeArguments.joined(separator: ", ")))
                 }
+
+                \(access)static func columnName(for keyPath: PartialKeyPath<\(name)>) -> String? {
+                    let columns: [PartialKeyPath<\(name)>: String] = [\(keyPaths.joined(separator: ", "))]
+                    return columns[keyPath]
+                }
+
+                \(access)var base: \(name) { self }
 
                 \(access)var columnValues: [DBKit.ColumnValue] {
                     [\(columnValues.joined(separator: ", "))]

@@ -5,6 +5,8 @@ public enum DBKitError: Error, Sendable, Equatable, CustomStringConvertible {
     case connectionClosed
     case missingColumn(String)
     case decodingFailed(column: String, type: String)
+    /// An active-model update or save found no row for the primary key.
+    case rowNotFound
 
     public var description: String {
         switch self {
@@ -12,6 +14,7 @@ public enum DBKitError: Error, Sendable, Equatable, CustomStringConvertible {
         case .connectionClosed: "the connection is closed"
         case .missingColumn(let column): "result has no column \"\(column)\""
         case .decodingFailed(let column, let type): "cannot decode column \"\(column)\" as \(type)"
+        case .rowNotFound: "no row matches the primary key"
         }
     }
 }

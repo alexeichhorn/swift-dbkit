@@ -10,7 +10,11 @@ public protocol Model: Sendable {
 
     static var schema: Schema { get }
     static func decodeBase(from row: RowReader) throws -> Base
+    /// Maps a stored property to its column name, for active-model change tracking.
+    static func columnName(for keyPath: PartialKeyPath<Base>) -> String?
 
+    /// The row as the plain model type.
+    var base: Base { get }
     /// Every column with its current value, in schema order.
     var columnValues: [ColumnValue] { get }
 }
@@ -82,11 +86,16 @@ extension Model {
         try await Base.delete().filtered(primaryKeyPredicate).execute(on: executor)
     }
 
+    /// An editable copy that tracks which columns you set, for ``ActiveModel/update(on:)`` and ``ActiveModel/save(on:)``.
+    public func active() -> ActiveModel<Base> { ActiveModel(base) }
+
     var primaryKeyPredicate: SQLNode {
         let values = columnValues
         let predicates = Self.schema.primaryKey.map { column in
             let value = values.first { $0.column == column }!.node
             let reference = SQLNode.column(ColumnReference(table: Self.schema.table, name: column))
+            // `= NULL` is never true, so a key column without a value has to be matched with `IS NULL`.
+            if case .null = value { return SQLNode.sequence([reference, .raw(" IS NULL")]) }
             return SQLNode.infix(reference, "=", value, parenthesized: false)
         }
         return predicates.dropFirst().reduce(predicates[0]) { .infix($0, "AND", $1) }
