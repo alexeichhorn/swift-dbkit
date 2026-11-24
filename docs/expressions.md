@@ -14,8 +14,10 @@ class ArticleModel {
 ```
 
 ```swift
-let titled = ArticleModel.title == "Swift"  // Expr<Bool>
-let subtitled = ArticleModel.subtitle == "Swift"  // Expr<Bool?>, NULL where the subtitle is NULL
+let normalizedTitle = ArticleModel.title.lowercased()  // Expr<String>
+let normalizedSubtitle = ArticleModel.subtitle.lowercased()  // Expr<String?>
+let titled = normalizedTitle == "swift"  // Expr<Bool>
+let subtitled = normalizedSubtitle == "swift"  // Expr<Bool?>, NULL where the subtitle is NULL
 let subtitleWithFallback = ArticleModel.subtitle ?? "No subtitle"  // Expr<String>, COALESCE
 
 let articles = try await ArticleModel.query()
@@ -31,7 +33,8 @@ required column they are `Expr<Bool>`. Between two expressions, a comparison is 
 nullable. `&&` and `||` are `Expr<Bool?>` when either operand is, and `!` keeps its operand's type. Only `isNull`,
 `isNotNull`, `isDistinct(from:)` and `isNotDistinct(from:)` are never NULL, so they stay `Expr<Bool>`. `filter`
 takes both kinds and keeps the rows where the predicate is true, so a NULL drops the row:
-`!(ArticleModel.subtitle == "Swift")` skips articles without a subtitle.
+`!(ArticleModel.subtitle == "Swift")` skips articles without a subtitle. Functions keep their input's nullability
+too, so `lowercased()` of a nullable column is `Expr<String?>`.
 
 A nullable column takes its optional type wherever it takes a value: plain values, optionals and `nil`. `== nil` and
 `!= nil` compile to `IS NULL` / `IS NOT NULL`, and so does `==` / `!=` with an optional that is `nil` at run time. The
@@ -39,7 +42,8 @@ other predicates bind `nil` as NULL, so `ArticleModel.subtitle < nil` matches no
 and optionals at compile time.
 
 `??` replaces only NULL, so empty strings and zeroes are kept. With a value or a required expression as fallback the
-result is required; with a nullable fallback it stays nullable.
+result is required; with a nullable fallback it stays nullable. `SQL.coalesce(value, fallback)` is the same and also
+takes a required first argument: both arguments have one type, and the result is nullable only when both are.
 
 ## Arithmetic Expressions
 
@@ -95,6 +99,13 @@ nullable one. It accepts the casts PostgreSQL has:
 - from `Date` to `Date`
 
 Any other cast, such as `Date` to `Double`, doesn't compile.
+
+`SQL.least` and `SQL.greatest` take two arguments of one type, and a literal takes the other argument's type.
+PostgreSQL skips NULL arguments, so the result is nullable only when both arguments are:
+`SQL.greatest(nullableColumn, 0)` is required. Numeric types don't mix here; cast one argument.
+
+`SQL.power(base, exponent)` is `Double` for any mix of `Int16`, `Int32`, `Int64`, `Int`, `Float` and `Double`, and
+`Decimal` for two `Decimal`s; `Decimal` takes no other type. A nullable argument makes the result nullable.
 
 ## Bitwise Expressions
 
@@ -153,6 +164,7 @@ class ScheduleModel {
     var baseIntervalHours: Int32
     var leaseWindow: Interval
     var backoffMinutes: Int32?
+    var attempts: Int32
     var updatedAt: Date
 }
 ```
@@ -166,11 +178,18 @@ let rows = try await ScheduleModel.query()
 let expired = try await ScheduleModel.query()
     .filter(ScheduleModel.updatedAt + ScheduleModel.leaseWindow <= Date())
     .all(on: db)
+
+// Exponential backoff, capped at an hour:
+let retrySeconds = SQL.least(3600.0, SQL.power(2.0, ScheduleModel.attempts - 1) * 60.0)
+let due = try await ScheduleModel.query()
+    .filter(ScheduleModel.updatedAt <= Date() - SQL.interval(seconds: retrySeconds))
+    .all(on: db)
 ```
 
 `SQL.interval(days:|hours:|minutes:|seconds:)` scales a numeric value or expression, fractions included:
 `SQL.interval(hours: 1.5)` is an hour and a half. Timestamps support `± Interval` values and interval expressions,
-and intervals add to and subtract from each other. A nullable operand makes the result nullable.
+and intervals add to and subtract from each other. A nullable operand makes the result nullable. `SQL.now()` is the
+transaction's start time, an `Expr<Date>`.
 
 An `Interval` value keeps PostgreSQL's months, days and microseconds; `.days(_:)`, `.hours(_:)`, `.minutes(_:)` and
 `.seconds(_:)` build one.
@@ -317,12 +336,22 @@ before wrapping: `SQL.sum(SaleModel.amount).filter(usSale) ?? 0` or
 ## SQL Functions And Expression-Based Grouping
 
 ```swift
+let buckets: [(Date, Decimal?)] = try await SaleModel.query()
+    .select(SQL.dateTrunc(.day, SaleModel.createdAt), SQL.sum(SaleModel.amount))
+    .groupBy(SQL.dateTrunc(.day, SaleModel.createdAt))
+    .orderBy(SQL.dateTrunc(.day, SaleModel.createdAt).asc)
+    .all(on: db)
+
 let amountBuckets: [(Int64, Int64)] = try await SaleModel.query()
     .select(SaleModel.amount / 100, SQL.countAll())
     .groupBy(SaleModel.amount / 100)
     .orderBy(SQL.countAll().desc)
     .all(on: db)
 ```
+
+`SQL.dateTrunc(unit, timestamp)` takes a `Date` and keeps its nullability. The `DateTruncUnit` renders as a literal,
+`DATE_TRUNC('day', …)`, so the same expression in `select` and `groupBy` matches. PostgreSQL truncates a
+`timestamptz` in the session's time zone.
 
 `groupBy` takes any expression, and `orderBy` takes any expression, including aggregates. Aggregates take computed
 values too: `SQL.max(SaleModel.discount ?? 0)`.
