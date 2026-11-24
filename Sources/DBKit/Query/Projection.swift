@@ -8,7 +8,7 @@ public struct Projection<each Value: SQLType>: SelectQuery {
 
     public func render() -> RenderedSQL {
         let renderer = SQLRenderer()
-        let sql = renderer.renderSelect(statement)
+        let sql = renderer.renderSelect(statement, eagerJoins: [])
         return RenderedSQL(sql: sql, binds: renderer.binds)
     }
 
@@ -68,7 +68,7 @@ public struct ProjectionQuery<Row: Sendable>: SelectQuery {
 
     public func render() -> RenderedSQL {
         let renderer = SQLRenderer()
-        let sql = renderer.renderSelect(statement)
+        let sql = renderer.renderSelect(statement, eagerJoins: [])
         return RenderedSQL(sql: sql, binds: renderer.binds)
     }
 

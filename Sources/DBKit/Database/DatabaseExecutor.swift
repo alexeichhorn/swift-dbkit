@@ -16,7 +16,7 @@ extension DatabaseExecutor {
     public func query<M: Model>(_ query: PostgresQuery, as model: M.Type) async throws -> [M.Base] {
         var models: [M.Base] = []
         for try await row in try await self.query(query) {
-            models.append(try M.decodeBase(from: RowReader(row: row.makeRandomAccess())))
+            models.append(try M.decodeBase(from: RowReader(row: row.makeRandomAccess(), prefix: "")))
         }
         return models
     }

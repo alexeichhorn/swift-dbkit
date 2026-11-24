@@ -19,10 +19,13 @@ public struct Relation: Sendable {
 
     let name: String
     let kind: Kind
+    let target: any Model.Type
     /// Source-table column of the join condition (the foreign key for belongs-to, the referenced key otherwise).
     let sourceColumn: String
     /// Target-table column of the join condition.
     let targetColumn: String
+    /// Relations walked before this one in a relation path like `TodoModel.user.organization`.
+    var parents: [Relation] = []
 
     /// Reads the join key from a source row.
     let sourceKey: @Sendable (any Model) -> KeyValue?
@@ -30,6 +33,8 @@ public struct Relation: Sendable {
     let targetKey: @Sendable (any Model, RowReader) throws -> KeyValue?
     /// Binds a list of source keys as one array parameter.
     let keyArray: @Sendable ([KeyValue]) -> Bind
+
+    var path: [Relation] { parents + [self] }
 
     static let parentKeyColumn = "__dbkit_parent"
 
@@ -41,6 +46,7 @@ public struct Relation: Sendable {
         Relation(
             name: name,
             kind: .belongsTo,
+            target: Target.self,
             sourceColumn: key.name,
             targetColumn: references.name,
             sourceKey: { relationKey(key.read($0 as! Source)) },
@@ -57,6 +63,7 @@ public struct Relation: Sendable {
         Relation(
             name: name,
             kind: .hasMany,
+            target: Target.self,
             sourceColumn: references.name,
             targetColumn: key.name,
             sourceKey: { relationKey(references.read($0 as! Source)) },
@@ -75,6 +82,7 @@ public struct Relation: Sendable {
         Relation(
             name: name,
             kind: .manyToMany(Relation.Through(table: Through.schema.table, sourceColumn: from.name, targetColumn: to.name)),
+            target: Target.self,
             sourceColumn: sourceKey.name,
             targetColumn: targetKey.name,
             sourceKey: { KeyValue(sourceKey.read($0 as! Source)) },

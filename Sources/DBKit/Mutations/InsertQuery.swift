@@ -162,7 +162,7 @@ public struct Returning<Row: Model>: Sendable where Row.Base == Row {
     let statement: MutationStatement
 
     public func all(on executor: some DatabaseExecutor) async throws -> [Row] {
-        try await executor.rows(render()) { try Row.decodeBase(from: RowReader(row: $0)) }
+        try await executor.rows(render()) { try Row.decodeBase(from: RowReader(row: $0, prefix: "")) }
     }
 
     /// The first affected row, or `nil` when none was affected (e.g. after `onConflictDoNothing`).

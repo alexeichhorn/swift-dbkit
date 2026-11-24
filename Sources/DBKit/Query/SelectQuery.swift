@@ -36,6 +36,15 @@ extension SelectQuery {
         updating { $0.having.append(predicate.sqlNode) }
     }
 
+    /// `JOIN other ON condition`, for tables without a declared relation.
+    public func join<Other: Model, P: SQLExpression>(_ other: Other.Type, on condition: P) -> Self where P.Value.NonNull == Bool {
+        updating { $0.joins.append(.table(Other.schema.table, on: condition.sqlNode, .inner)) }
+    }
+
+    public func leftJoin<Other: Model, P: SQLExpression>(_ other: Other.Type, on condition: P) -> Self where P.Value.NonNull == Bool {
+        updating { $0.joins.append(.table(Other.schema.table, on: condition.sqlNode, .left)) }
+    }
+
     func filtered(_ node: SQLNode) -> Self { updating { $0.filters.append(node) } }
 
     func updating(_ change: (inout SelectStatement) -> Void) -> Self {

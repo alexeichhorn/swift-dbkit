@@ -8,7 +8,7 @@ public protocol Model: Sendable {
     associatedtype Base: Model where Base.Base == Base
     /// The values needed to insert a row: every column except auto-increment keys.
     associatedtype Insert: ModelInsert
-    /// The model's relations as static properties, for `.with(\.relation)`.
+    /// The model's relations as static properties, for `.with(\.relation)` and joins.
     associatedtype Relations = NoRelations
 
     static var schema: Schema { get }
@@ -59,16 +59,18 @@ public struct ColumnValue: Sendable {
     }
 }
 
-/// Reads model columns from a result row.
+/// Reads model columns from a result row; `prefix` selects the columns of a joined relation.
 public struct RowReader {
     let row: PostgresRandomAccessRow
+    let prefix: String
 
     public func decode<V: SQLType>(_ type: V.Type, _ column: String) throws -> V {
-        guard row.contains(column) else { throw DBKitError.missingColumn(column) }
+        let name = prefix + column
+        guard row.contains(name) else { throw DBKitError.missingColumn(name) }
         do {
-            return try V.decode(from: row[column])
+            return try V.decode(from: row[name])
         } catch {
-            throw DBKitError.decodingFailed(column: column, type: "\(V.self)")
+            throw DBKitError.decodingFailed(column: name, type: "\(V.self)")
         }
     }
 }

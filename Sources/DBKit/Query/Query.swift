@@ -11,6 +11,16 @@ public struct Query<Row: Model>: SelectQuery {
         self.plan = plan
     }
 
+    /// `INNER JOIN` a relation to filter or sort by its columns. Doesn't load it; combine with `distinct()` for
+    /// to-many joins.
+    public func join<L: RelationLoad>(_ relation: KeyPath<Row.Base.Relations.Type, L>) -> Self where L.Source == Row.Base {
+        updating { $0.joins.append(.relation(Row.Base.Relations.self[keyPath: relation].relation, .inner)) }
+    }
+
+    public func leftJoin<L: RelationLoad>(_ relation: KeyPath<Row.Base.Relations.Type, L>) -> Self where L.Source == Row.Base {
+        updating { $0.joins.append(.relation(Row.Base.Relations.self[keyPath: relation].relation, .left)) }
+    }
+
     /// Switches to a projection of the given expressions, decoded as a typed tuple:
     /// `.select(UserModel.id, UserModel.email)` returns `(Int64, String?)` rows.
     public func select<each E: SQLExpression>(_ expressions: repeat each E) -> Projection<repeat (each E).Value> {
@@ -36,16 +46,16 @@ public struct Query<Row: Model>: SelectQuery {
 
     public func render() -> RenderedSQL {
         let renderer = SQLRenderer()
-        let sql = renderer.renderSelect(statement)
+        let sql = renderer.renderSelect(statement, eagerJoins: plan.joins)
         return RenderedSQL(sql: sql, binds: renderer.binds)
     }
 
     public func all(on executor: some DatabaseExecutor) async throws -> [Row] {
-        let nodes = try await RawNode.load(render(), model: Row.Base.self, on: executor)
+        let nodes = try await RawNode.load(render(), model: Row.Base.self, joins: plan.joins, on: executor)
         return try await plan.build(nodes, executor)
     }
 
-    /// The first row (`LIMIT 1`).
+    /// The first row (`LIMIT 1`). With a joined to-many load, the limit applies to joined rows, so use `.selectIn`.
     public func first(on executor: some DatabaseExecutor) async throws -> Row? {
         try await limit(1).all(on: executor).first
     }

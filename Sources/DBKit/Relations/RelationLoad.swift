@@ -1,4 +1,4 @@
-/// A relation of `Source` that can be eager-loaded.
+/// A relation of `Source` that can be eager-loaded or joined.
 ///
 /// `@Model` generates one conforming type per relation, generic over the source row and the loaded child type
 /// `Child`. The model's `Relations.user` loads onto a plain row; on an already loaded row,
@@ -36,4 +36,6 @@ public protocol ManyToManyRelation: RelationLoad {}
 public enum LoadStrategy: Sendable {
     /// One extra query per relation level: `WHERE key = ANY($1)`. Best with `LIMIT`/`OFFSET` and large fan-out.
     case selectIn
+    /// A `LEFT JOIN` in the main query, decoded into the tree. One query, but rows multiply per to-many child.
+    case joined
 }
