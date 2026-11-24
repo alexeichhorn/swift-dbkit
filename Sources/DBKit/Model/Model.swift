@@ -101,7 +101,7 @@ extension Model {
         let values = columnValues
         let predicates = Self.schema.primaryKey.map { column in
             let value = values.first { $0.column == column }!.node
-            let reference = SQLNode.column(ColumnReference(table: Self.schema.table, name: column))
+            let reference = SQLNode.column(ColumnReference(table: Self.schema.table, name: column, path: []))
             // `= NULL` is never true, so a key column without a value has to be matched with `IS NULL`.
             if case .null = value { return SQLNode.sequence([reference, .raw(" IS NULL")]) }
             return SQLNode.infix(reference, "=", value, parenthesized: false)

@@ -119,18 +119,18 @@ func selectIn<L: RelationLoad>(_ load: L, for sources: [L.Source], on executor: 
     let keysBind = SQLNode.bind(relation.keyArray(uniqueKeys))
     switch relation.kind {
     case .belongsTo, .hasMany:
-        let keyColumn = SQLNode.column(ColumnReference(table: target.table, name: relation.targetColumn))
+        let keyColumn = SQLNode.column(ColumnReference(table: target.table, name: relation.targetColumn, path: []))
         statement.filters = [.sequence([keyColumn, .raw(" = ANY("), keysBind, .raw(")")])]
     case .manyToMany(let through):
-        let throughSource = SQLNode.column(ColumnReference(table: through.table, name: through.sourceColumn))
-        let throughTarget = SQLNode.column(ColumnReference(table: through.table, name: through.targetColumn))
-        let targetKey = SQLNode.column(ColumnReference(table: target.table, name: relation.targetColumn))
+        let throughSource = SQLNode.column(ColumnReference(table: through.table, name: through.sourceColumn, path: []))
+        let throughTarget = SQLNode.column(ColumnReference(table: through.table, name: through.targetColumn, path: []))
+        let targetKey = SQLNode.column(ColumnReference(table: target.table, name: relation.targetColumn, path: []))
         statement.extraItems = [SelectItem(node: throughSource, alias: Relation.parentKeyColumn)]
         statement.joins = [.table(through.table, on: .infix(throughTarget, "=", targetKey, parenthesized: false), .inner)]
         statement.filters = [.sequence([throughSource, .raw(" = ANY("), keysBind, .raw(")")])]
     }
     statement.orderBy = target.primaryKey.map {
-        OrderBy(node: .column(ColumnReference(table: target.table, name: $0)), descending: false)
+        OrderBy(node: .column(ColumnReference(table: target.table, name: $0, path: [])), descending: false)
     }
 
     let renderer = SQLRenderer()

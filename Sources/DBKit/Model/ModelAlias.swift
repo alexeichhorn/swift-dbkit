@@ -11,7 +11,7 @@ public struct ModelAlias<Row: Model>: Sendable where Row.Base == Row {
 
     /// The column qualified by this alias: `reports.managerID` is `"reports"."manager_id"`.
     public subscript<V: SQLType>(dynamicMember column: KeyPath<Row.Type, Column<Row, V>>) -> Expr<V> {
-        Expr(.column(ColumnReference(table: name, name: Row.self[keyPath: column].name)))
+        Expr(.column(ColumnReference(table: name, name: Row.self[keyPath: column].name, path: [])))
     }
 
     /// Starts a `SELECT` from `"table" AS "alias"`.

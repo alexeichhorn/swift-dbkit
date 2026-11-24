@@ -47,12 +47,12 @@ public struct InsertQuery<Row: Model>: Sendable where Row.Base == Row {
     }
 
     var statement: MutationStatement {
-        MutationStatement { renderer in
+        MutationStatement(table: Row.schema.table) { renderer, scope in
             let columns = rows.first?.map(\.column) ?? []
-            let values = rows.map { row in "(" + row.map { renderer.render($0.node) }.joined(separator: ", ") + ")" }
+            let values = rows.map { row in "(" + row.map { renderer.render($0.node, in: scope) }.joined(separator: ", ") + ")" }
             var sql = "INSERT INTO \(quoted(Row.schema.table)) (\(columns.map(quoted).joined(separator: ", "))) VALUES "
             sql += values.joined(separator: ", ")
-            if let conflict { sql += " " + renderer.render(conflict) }
+            if let conflict { sql += " " + renderer.render(conflict, in: scope) }
             return sql
         }
     }
@@ -121,10 +121,10 @@ public struct UpdateQuery<Row: Model>: Sendable where Row.Base == Row {
 
     var statement: MutationStatement {
         precondition(!assignments.isEmpty, "an UPDATE needs at least one set(_:to:)")
-        return MutationStatement { renderer in
-            let sets = assignments.map { "\(quoted($0.column)) = \(renderer.render($0.node))" }
+        return MutationStatement(table: Row.schema.table) { renderer, scope in
+            let sets = assignments.map { "\(quoted($0.column)) = \(renderer.render($0.node, in: scope))" }
             var sql = "UPDATE \(quoted(Row.schema.table)) SET \(sets.joined(separator: ", "))"
-            if !filters.isEmpty { sql += " WHERE " + filters.map { renderer.render($0) }.joined(separator: " AND ") }
+            if !filters.isEmpty { sql += " WHERE " + filters.map { renderer.render($0, in: scope) }.joined(separator: " AND ") }
             return sql
         }
     }
@@ -165,9 +165,9 @@ public struct DeleteQuery<Row: Model>: Sendable where Row.Base == Row {
     }
 
     var statement: MutationStatement {
-        MutationStatement { renderer in
+        MutationStatement(table: Row.schema.table) { renderer, scope in
             var sql = "DELETE FROM \(quoted(Row.schema.table))"
-            if !filters.isEmpty { sql += " WHERE " + filters.map { renderer.render($0) }.joined(separator: " AND ") }
+            if !filters.isEmpty { sql += " WHERE " + filters.map { renderer.render($0, in: scope) }.joined(separator: " AND ") }
             return sql
         }
     }
@@ -191,13 +191,16 @@ public struct Returning<Row: Model>: Sendable where Row.Base == Row {
     }
 }
 
-/// Renders a mutation.
+/// Renders a mutation. Relation paths aren't supported because mutations have no joins.
 struct MutationStatement: Sendable {
-    let body: @Sendable (SQLRenderer) -> String
+    let table: String
+    let body: @Sendable (SQLRenderer, JoinScope) -> String
 
     func render(returningAll: Bool) -> RenderedSQL {
         let renderer = SQLRenderer()
-        let sql = body(renderer) + (returningAll ? " RETURNING *" : "")
+        let scope = JoinScope(base: table)
+        let sql = body(renderer, scope) + (returningAll ? " RETURNING *" : "")
+        precondition(scope.joins.isEmpty, "relation paths are only supported in SELECT queries")
         return RenderedSQL(sql: sql, binds: renderer.binds)
     }
 }

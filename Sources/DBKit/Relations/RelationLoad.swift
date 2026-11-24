@@ -1,4 +1,4 @@
-/// A relation of `Source` that can be eager-loaded or joined.
+/// A relation of `Source` that can be eager-loaded, joined, or used in a relation path.
 ///
 /// `@Model` generates one conforming type per relation, generic over the source row and the loaded child type
 /// `Child`. The model's `Relations.user` loads onto a plain row; on an already loaded row,
@@ -11,7 +11,7 @@ public protocol RelationLoad: Sendable {
     associatedtype Child: Model where Child.Base == Target
     associatedtype Output: Model where Output.Base == Source.Base
 
-    var relation: Relation { get }
+    var relation: Relation { get set }
     /// How loaded children get their own nested relations.
     var plan: LoadPlan<Child> { get }
 
@@ -25,12 +25,29 @@ public protocol LoadedModel: Model {
     associatedtype LoadedRelations
 }
 
-/// A to-one relation.
+/// A to-one relation. Its target's columns and further to-one relations are reachable as a relation path:
+/// `TodoModel.Relations.user.name`, `RecordModel.Relations.owner.organization.name`. Path columns are nullable because the
+/// `LEFT JOIN` can find no row.
+@dynamicMemberLookup
 public protocol BelongsToRelation: RelationLoad {}
 
 public protocol HasManyRelation: RelationLoad {}
 
 public protocol ManyToManyRelation: RelationLoad {}
+
+extension BelongsToRelation {
+    public subscript<V: SQLType>(dynamicMember column: KeyPath<Target.Type, Column<Target, V>>) -> Expr<V.NonNull?> {
+        let name = Target.self[keyPath: column].name
+        return Expr(.column(ColumnReference(table: Target.schema.table, name: name, path: relation.path)))
+    }
+
+    public subscript<Next: BelongsToRelation>(dynamicMember next: KeyPath<Target.Relations.Type, Next>) -> Next
+    where Next.Source == Target {
+        var nextRelation = Target.Relations.self[keyPath: next]
+        nextRelation.relation.parents = relation.path
+        return nextRelation
+    }
+}
 
 /// How an eager load fetches its rows.
 public enum LoadStrategy: Sendable {

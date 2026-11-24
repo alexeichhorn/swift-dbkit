@@ -38,7 +38,7 @@ public struct Column<Model: DBKit.Model, Value: SQLType>: SQLExpression {
         self.read = read
     }
 
-    public var sqlNode: SQLNode { .column(ColumnReference(table: Model.schema.table, name: name)) }
+    public var sqlNode: SQLNode { .column(ColumnReference(table: Model.schema.table, name: name, path: [])) }
 }
 
 /// An aggregate function call. Only aggregates accept a `FILTER (WHERE …)` clause.

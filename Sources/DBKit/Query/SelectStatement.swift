@@ -58,10 +58,11 @@ struct JoinedLoad: Sendable {
 final class SQLRenderer {
     private(set) var binds: [Bind] = []
 
-    func render(_ node: SQLNode) -> String {
+    func render(_ node: SQLNode, in scope: JoinScope) -> String {
         switch node {
         case .column(let column):
-            return "\(quoted(column.table)).\(quoted(column.name))"
+            let qualifier = column.path.isEmpty ? column.table : scope.alias(for: column.path, kind: .left, renderer: self)
+            return "\(quoted(qualifier)).\(quoted(column.name))"
         case .bind(let bind):
             binds.append(bind)
             return "$\(binds.count)"
@@ -70,7 +71,7 @@ final class SQLRenderer {
         case .raw(let sql):
             return sql
         case .sequence(let nodes):
-            return nodes.map { render($0) }.joined()
+            return nodes.map { render($0, in: scope) }.joined()
         case .subquery(let statement):
             return "(\(renderSelect(statement, eagerJoins: [])))"
         }
@@ -88,24 +89,24 @@ final class SQLRenderer {
 
         var columns: [String]
         if let items = statement.items {
-            columns = items.map { renderItem($0) }
+            columns = items.map { renderItem($0, in: scope) }
         } else {
-            columns = ["\(quoted(base)).*"] + statement.extraItems.map { renderItem($0) }
+            columns = ["\(quoted(base)).*"] + statement.extraItems.map { renderItem($0, in: scope) }
             columns += eagerColumns(eagerJoins, path: [], prefix: "", in: scope)
         }
 
         var clauses: [String] = []
         if !statement.filters.isEmpty {
-            clauses.append("WHERE " + statement.filters.map { render($0) }.joined(separator: " AND "))
+            clauses.append("WHERE " + statement.filters.map { render($0, in: scope) }.joined(separator: " AND "))
         }
         if !statement.groupBy.isEmpty {
-            clauses.append("GROUP BY " + statement.groupBy.map { render($0) }.joined(separator: ", "))
+            clauses.append("GROUP BY " + statement.groupBy.map { render($0, in: scope) }.joined(separator: ", "))
         }
         if !statement.having.isEmpty {
-            clauses.append("HAVING " + statement.having.map { render($0) }.joined(separator: " AND "))
+            clauses.append("HAVING " + statement.having.map { render($0, in: scope) }.joined(separator: " AND "))
         }
         if !statement.orderBy.isEmpty {
-            let orders = statement.orderBy.map { render($0.node) + ($0.descending ? " DESC" : " ASC") }
+            let orders = statement.orderBy.map { render($0.node, in: scope) + ($0.descending ? " DESC" : " ASC") }
             clauses.append("ORDER BY " + orders.joined(separator: ", "))
         }
         if let limit = statement.limit { clauses.append("LIMIT \(limit)") }
@@ -127,8 +128,8 @@ final class SQLRenderer {
         return ([head] + scope.joins + clauses).joined(separator: " ")
     }
 
-    private func renderItem(_ item: SelectItem) -> String {
-        let sql = render(item.node)
+    private func renderItem(_ item: SelectItem, in scope: JoinScope) -> String {
+        let sql = render(item.node, in: scope)
         return item.alias.map { "\(sql) AS \(quoted($0))" } ?? sql
     }
 
@@ -189,7 +190,7 @@ final class JoinScope {
 
     func addTableJoin(_ table: String, on condition: SQLNode, kind: JoinKind, renderer: SQLRenderer) {
         usedNames.insert(table)
-        joins.append("\(kind.rawValue) \(quoted(table)) ON \(renderer.render(condition))")
+        joins.append("\(kind.rawValue) \(quoted(table)) ON \(renderer.render(condition, in: self))")
     }
 
     private func uniqueName(_ name: String, fallback: String) -> String {

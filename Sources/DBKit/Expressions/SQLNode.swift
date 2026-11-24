@@ -55,11 +55,13 @@ public indirect enum SQLNode: Sendable {
     }
 }
 
-/// A model column.
+/// A model column, optionally reached through a chain of `BelongsTo` relations (a relation path).
 public struct ColumnReference: Sendable {
     /// The qualifier: the model's table, or the alias of a ``ModelAlias``.
     let table: String
     let name: String
+    /// Relations walked from the query's model to the column's table; empty for direct columns.
+    let path: [Relation]
 }
 
 /// A bind parameter value.
