@@ -63,7 +63,11 @@ import Testing
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         // The default build system fails without the separate emit-module job that the fixture package turns off.
         // Indexing a whole-module build fails with "index output filenames do not match input source files".
-        process.arguments = ["swift", "build", "--build-system", "native", "--disable-index-store", "--package-path", package.path]
+        // A cached build manifest misses source files added to DBKit since the last build.
+        process.arguments = [
+            "swift", "build", "--build-system", "native", "--disable-index-store", "--disable-build-manifest-caching",
+            "--package-path", package.path,
+        ]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
