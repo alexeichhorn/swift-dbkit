@@ -93,3 +93,51 @@ nullable one. It accepts the casts PostgreSQL has:
 - from `Date` to `Date`
 
 Any other cast, such as `Date` to `Double`, doesn't compile.
+
+## Bitwise Expressions
+
+| Swift | PostgreSQL |
+| --- | --- |
+| `left & right` | `left & right` |
+| `left \| right` | `left \| right` |
+| `left ^ right` | `left # right` |
+| `~value` | `~value` |
+| `value << count` | `value << count` |
+| `value >> count` | `value >> count` |
+
+```swift
+@Model(table: "accounts")
+class AccountModel {
+    @Key @AutoIncrement var id: Int64
+    var accessMask: Int64
+    var roleBits: Int16
+}
+```
+
+```swift
+let editors = try await AccountModel.query()
+    .filter((AccountModel.accessMask & 0b0010) != 0)
+    .orderBy((AccountModel.accessMask >> 1).desc)
+    .all(on: db)
+
+let combined = AccountModel.accessMask | AccountModel.roleBits  // Expr<Int64>
+```
+
+Bitwise operators work on `Int16`, `Int32`, `Int64` and `Int`. A nullable operand makes the result nullable.
+
+`&`, `|` and `^` give PostgreSQL's result type, as arithmetic does:
+
+| Operands | Result |
+| --- | --- |
+| the same type | that type |
+| `Int16` and `Int32` | `Int32` |
+| `Int16` or `Int32` and `Int64` | `Int64` |
+| `Int` and another integer type | `Int64` |
+
+An untyped literal takes the other operand's type on either side, so `AccountModel.roleBits & 1` is `Expr<Int16>`.
+A typed value next to an expression of another integer type must be `Int16`, `Int32` or `Int64`; an `Int` value
+combines only with an `Int` expression.
+
+`~` keeps its operand's type. `<<` and `>>` keep the left operand's type, which may also be a value:
+`Int64(1) << count`. The count is `Int32` or `Int16`, required or nullable, and a literal count is `Int32`.
+PostgreSQL doesn't narrow a `bigint` count, so an `Int64` or `Int` count doesn't compile; `cast(to: Int32.self)` it.
