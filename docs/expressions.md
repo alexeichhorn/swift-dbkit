@@ -355,3 +355,16 @@ let amountBuckets: [(Int64, Int64)] = try await SaleModel.query()
 
 `groupBy` takes any expression, and `orderBy` takes any expression, including aggregates. Aggregates take computed
 values too: `SQL.max(SaleModel.discount ?? 0)`.
+
+## Join + Aggregation
+
+Using the `UserModel` / `TodoModel` from the [README](../README.md):
+
+```swift
+let todoCounts: [(String, Int64)] = try await UserModel.query()
+    .join(\.todos)
+    .select(UserModel.name, SQL.count(TodoModel.id))
+    .groupBy(UserModel.name)
+    .orderBy(UserModel.name.desc)
+    .all(on: db)
+```

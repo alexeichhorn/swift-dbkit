@@ -73,16 +73,24 @@ Reading a relation that wasn't loaded doesn't compile: `'user' is unavailable: r
 .with(\.user) to the query`. Passing a row without the relation to a `With…` parameter doesn't compile either,
 though Swift's message there is less specific.
 
-## Eager Loading
+## Eager Loading And Join Filtering
 
 `.with(_:)` takes a key path to a relation and changes the row type:
 
 ```swift
 let users: [UserModel.Loaded<[TodoModel]>] = try await UserModel.query().with(\.todos).all(on: db)
+let joined = try await UserModel.query().with(\.todos, .joined).all(on: db)
 
 let todos: [TodoModel.Loaded<UserModel?, [TagModel]>] = try await TodoModel.query()
-    .with(\.user)
+    .with(\.user, .joined)
     .with(\.tags)
+    .all(on: db)
+
+// Join to filter only; todos stay unloaded.
+let filtered: [UserModel] = try await UserModel.query()
+    .join(\.todos)
+    .filter(TodoModel.title == "Keep me")
+    .distinct()
     .all(on: db)
 ```
 
@@ -105,17 +113,22 @@ for user in users {
 
 // Several nested relations on the same child:
 let full = try await UserModel.query()
-    .with(\.todos) { $0.with(\.user).with(\.tags) }
+    .with(\.todos) { $0.with(\.user, .joined).with(\.tags) }
     .all(on: db)
 ```
 
 `With…` types match only the plain relation type (`UserModel.WithTodos` means `[TodoModel]`), so pass nested
 results as their concrete `Loaded` type or read the children before passing them on.
 
-## Select-In Loading
+## Select-In vs Joined
 
-`.selectIn`, the default strategy, runs one extra query per relation (`WHERE key = ANY($1)`), batched per level. The
-main query stays as it is, so it works well with `limit`/`offset` and large fan-out.
+- `.selectIn` (default): one extra query per relation (`WHERE key = ANY($1)`), batched per level. Best with
+  `limit`/`offset` and large fan-out.
+- `.joined`: a `LEFT JOIN` in the main query, decoded into the tree. One query, but rows multiply per to-many
+  child, and `limit` applies to the joined rows. Filters on the joined table (`TodoModel.title == "foo"`) also
+  limit the loaded children.
+
+Strategies mix freely: a joined relation can have select-in children and the other way round.
 
 ## Design: Why Models Are Classes
 
