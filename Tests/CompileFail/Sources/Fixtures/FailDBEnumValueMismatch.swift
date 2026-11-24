@@ -16,7 +16,7 @@ class TaskModel {
 
 private func valuesOfAnotherType() {
     let label = "queued"
-    _ = TaskModel.query().filter(TaskModel.state == DeliveryState.queued)  // error: requires the types
-    _ = TaskModel.query().filter(TaskModel.state == "queued")  // error: requires the types
-    _ = TaskModel.query().filter(TaskModel.state == label)  // error: requires the types
+    _ = TaskModel.query().filter(TaskModel.state == DeliveryState.queued)  // error: '=='
+    _ = TaskModel.query().filter(TaskModel.state == "queued")  // error: cannot convert
+    _ = TaskModel.query().filter(TaskModel.state == label)  // error: cannot convert
 }
