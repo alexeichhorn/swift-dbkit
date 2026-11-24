@@ -90,6 +90,14 @@ class SaleModel {
     var createdAt: Date
 }
 
+/// `sales` in `amount` order, through a view that draws from the sequence `sale_reads` for every row it produces.
+@Model(table: "counted_sales")
+class CountedSaleModel {
+    @Key var id: Int64
+    var amount: Int64
+    var readNumber: Int64
+}
+
 /// rust-dbkit's `func_rows`. `Date` stands in for its `timestamp` column.
 @Model(table: "func_rows")
 class FuncRowModel {

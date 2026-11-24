@@ -15,6 +15,15 @@ class RolledBackNoteModel {
     var body: String
 }
 
+/// `sales` as a real table of `streamsReadInBatchesOnEveryExecutor`, which another pooled connection reads.
+@Model(table: "streamed_sales")
+class StreamedSaleModel {
+    @Key @AutoIncrement var id: Int64
+    var region: String
+    var amount: Int64
+    var createdAt: Date
+}
+
 /// A type of the app's own, stored as `text` through its PostgresNIO encoding.
 struct EmailAddress: SQLValue, Equatable {
     static var sqlTypeName: String { "text" }
@@ -735,7 +744,10 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
 
             let page = try await UserModel.query().orderBy(UserModel.id.asc).paginate(page: 2, perPage: 1, on: tx)
             #expect(page.items.map(\.name) == ["Beta"] && page.total == 2 && page.totalPages == 2)
-            // Waits for slice 25: `stream(on:)` yields "Alpha 2" and "Beta".
+
+            var streamed: [String] = []
+            for try await user in try await UserModel.query().orderBy(UserModel.id.asc).stream(on: tx) { streamed.append(user.name) }
+            #expect(streamed == ["Alpha 2", "Beta"])
         }
     }
 
@@ -855,6 +867,115 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
         #expect(error.description == "the connection is closed")
         // The pool replaces the lost connection.
         #expect(try await db.query("SELECT 1").collect().count == 1)
+    }
+
+    /// The stream's connection is terminated after its first row, so a later fetch fails. A cursor that kept waiting
+    /// for an answer on the closed connection would keep the pool's only connection lent, and the last query would wait.
+    @Test(.timeLimit(.minutes(1))) func aStreamOnALostConnectionThrowsAndFreesThePool() async throws {
+        try await withPoolOfOneConnection { db in
+            try await db.query("CREATE TEMP VIEW stream_probe AS SELECT n::BIGINT AS id FROM generate_series(1, 5000) AS n")
+            let pid = try #require(try await backendPID(on: db))
+            var read = 0
+            await #expect(throws: (any Error).self) {
+                for try await _ in try await StreamProbeModel.query().stream(on: db) {
+                    read += 1
+                    guard read == 1 else { continue }
+                    // Waits until the backend has exited.
+                    let terminated = try await testDatabase().query("SELECT pg_terminate_backend(\(pid), 5000)").collect().first?.decode(
+                        Bool.self)
+                    #expect(terminated == true)
+                }
+            }
+            #expect(read >= 1 && read < 5000)
+            #expect(try await backendPID(on: db) != pid)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func streamsReadInBatchesOnEveryExecutor() async throws {
+        try await withRealTable(
+            "streamed_sales",
+            columns: "id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL"
+        ) { db in
+            // 2,500 sales with the amounts 1 to 2,500: more than two stream batches.
+            try await db.query(
+                "INSERT INTO streamed_sales (region, amount, created_at) SELECT 'r', n, now() FROM generate_series(1, 2500) AS n")
+            let sales = StreamedSaleModel.query().orderBy(StreamedSaleModel.amount.asc)
+
+            // 2,000 rows are two full batches, and the bound values travel with the cursor.
+            var amounts: [Int64] = []
+            for try await sale in try await sales.filter(StreamedSaleModel.amount > 500).filter(StreamedSaleModel.createdAt < Date() + 60)
+                .stream(on: db)
+            {
+                // Another pooled connection answers while the stream holds its own.
+                if amounts.isEmpty { #expect(try await StreamedSaleModel.query().count(on: db) == 2500) }
+                amounts.append(sale.amount)
+            }
+            #expect(amounts == Array(501...2500))
+
+            let marked = try await db.transaction { tx in
+                var amounts: [Int64] = []
+                for try await sale in try await sales.stream(on: tx) { amounts.append(sale.amount) }
+                #expect(amounts == Array(1...2500))
+
+                for try await sale in try await sales.stream(on: tx) {
+                    // The transaction's connection answers other queries between two rows.
+                    try await StreamedSaleModel.update().set(StreamedSaleModel.region, to: "s").filter(StreamedSaleModel.id == sale.id)
+                        .execute(on: tx)
+                    if sale.amount == 2 { break }
+                }
+                #expect(try await integer("SELECT count(*) FROM pg_cursors WHERE name <> ''", on: tx) == 0)
+                return try await StreamedSaleModel.query().filter(StreamedSaleModel.region == "s").count(on: tx)
+            }
+            #expect(marked == 2)
+            #expect(try await StreamedSaleModel.query().filter(StreamedSaleModel.region == "s").count(on: db) == 2)
+        }
+    }
+
+    /// `counted_sales` draws from a sequence for every row it produces, so the sequence tells how many rows the server
+    /// read. The pool has one connection, so the checks after a stream run on the connection that stream used.
+    @Test(.timeLimit(.minutes(1))) func leavingAStreamEarlyStopsTheServerAndFreesTheConnection() async throws {
+        try await withPoolOfOneConnection { db in
+            try await db.query(
+                "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL)"
+            )
+            try await db.query("INSERT INTO sales (region, amount, created_at) SELECT 'r', n, now() FROM generate_series(1, 2500) AS n")
+            try await db.query("CREATE TEMP SEQUENCE sale_reads")
+            try await db.query(
+                "CREATE TEMP VIEW counted_sales AS SELECT id, amount, nextval('sale_reads') AS read_number FROM sales ORDER BY amount")
+            struct Abort: Error {}
+
+            for leave in ["break", "throw", "cancel"] {
+                let before = try #require(try await integer("SELECT nextval('sale_reads')", on: db))
+                let reader = Task {
+                    var amounts: [Int64] = []
+                    do {
+                        for try await sale in try await CountedSaleModel.query().stream(on: db) {
+                            amounts.append(sale.amount)
+                            if amounts.count < 2 { continue }
+                            if leave == "break" { break }
+                            if leave == "throw" { throw Abort() }
+                            withUnsafeCurrentTask { $0?.cancel() }
+                        }
+                    } catch {}
+                    return amounts
+                }
+                #expect(await reader.value == [1, 2], "\(leave)")
+
+                // One batch at most, never the 2,500 rows of the view.
+                let produced = try #require(try await integer("SELECT nextval('sale_reads')", on: db)) - before - 1
+                #expect(produced >= 2 && produced <= 1000, "\(leave): the server produced \(produced) rows")
+                try await expectNoCursorOrTransaction(on: db)
+            }
+
+            // The sequence ends after 1,500 numbers, so the second batch fails on the server.
+            try await db.query("ALTER SEQUENCE sale_reads RESTART MAXVALUE 1500")
+            var read = 0
+            await #expect(throws: PSQLError.self) {
+                for try await _ in try await CountedSaleModel.query().stream(on: db) { read += 1 }
+            }
+            #expect(read >= 1000)
+            try await expectNoCursorOrTransaction(on: db)
+        }
     }
 
     @Test func postgresTypesAggregatesAndFunctions() async throws {
