@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.33.0"),
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0"),
+        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.6.0"),
     ],
     targets: [
         .macro(
@@ -31,7 +32,7 @@ let package = Package(
         ),
         .testTarget(
             name: "DBKitTests",
-            dependencies: ["DBKit"]
+            dependencies: ["DBKit", .product(name: "ServiceLifecycle", package: "swift-service-lifecycle")]
         ),
         .testTarget(
             name: "DBKitMacrosTests",
