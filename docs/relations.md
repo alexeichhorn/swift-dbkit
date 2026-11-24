@@ -130,6 +130,22 @@ results as their concrete `Loaded` type or read the children before passing them
 
 Strategies mix freely: a joined relation can have select-in children and the other way round.
 
+## Explicit Load Afterwards
+
+Relations never load on access. Load them explicitly with one select-in query, for one row or an array:
+
+```swift
+let user = try await UserModel.find(1, on: db)!
+let loaded = try await user.load(\.todos, on: db)
+print(loaded.todos.count)
+
+let all = try await UserModel.query().all(on: db)
+let withTags = try await all.load(\.todos, on: db) { $0.with(\.tags) }
+print(withTags.count)
+```
+
+On a loaded row, `load(_:on:)` keeps the relations already loaded.
+
 ## Design: Why Models Are Classes
 
 The goal: functions take `UserModel` for any row and `UserModel.WithTodos` when a relation must be loaded,
