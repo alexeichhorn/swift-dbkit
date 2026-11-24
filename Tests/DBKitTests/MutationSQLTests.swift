@@ -43,11 +43,72 @@ class MutationUserModel {
         #expect(rendered.binds.map(\.description) == ["a@b.com", "Alice", "Bob"])
     }
 
-    // Waits for slice 6: `compilesInsertOnConflictDoNothingWithSingleTarget`,
-    // `compilesInsertManyOnConflictDoNothingWithCompositeTarget`,
-    // `compilesInsertOnConflictDoUpdateWithCompositeTargetAndSelectedOverwriteColumns`,
-    // `compilesInsertOnConflictDoUpdateWithFourSelectedOverwriteColumns` and
-    // `compilesInsertOnConflictDoUpdateWithNullInsertValuesAndPreservesBindOrder`.
+    @Test func compilesInsertOnConflictDoNothingWithSingleTarget() {
+        let rendered = MutationUserModel.insert(MutationUserModel.Insert(email: "a@b.com", name: "Alice"))
+            .onConflictDoNothing(MutationUserModel.email)
+            .returningAll()
+            .render()
+        #expect(rendered.sql == #"INSERT INTO "users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO NOTHING RETURNING *"#)
+        #expect(rendered.binds.map(\.description) == ["a@b.com", "Alice"])
+    }
+
+    @Test func compilesInsertManyOnConflictDoNothingWithCompositeTarget() {
+        let rendered = RunPayloadModel.insert([
+            RunPayloadModel.Insert(targetID: 10, runID: 20, payload: "v1", source: "seed", version: 1),
+            RunPayloadModel.Insert(targetID: 11, runID: 21, payload: "v2", source: "seed-2", version: 2),
+        ])
+        .onConflictDoNothing(RunPayloadModel.targetID, RunPayloadModel.runID)
+        .returningAll()
+        .render()
+        #expect(
+            rendered.sql
+                == #"INSERT INTO "run_payloads" ("target_id", "run_id", "payload", "source", "version") VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10) ON CONFLICT ("target_id", "run_id") DO NOTHING RETURNING *"#
+        )
+        #expect(rendered.binds.map(\.description) == ["10", "20", "v1", "seed", "1", "11", "21", "v2", "seed-2", "2"])
+    }
+
+    @Test func compilesInsertOnConflictDoUpdateWithCompositeTargetAndSelectedOverwriteColumns() {
+        let rendered = RunPayloadModel.insert(
+            RunPayloadModel.Insert(targetID: 42, runID: 7, payload: "new-payload", source: "new-source", version: 3)
+        )
+        .onConflict(RunPayloadModel.targetID, RunPayloadModel.runID, doUpdate: RunPayloadModel.payload, RunPayloadModel.version)
+        .returningAll()
+        .render()
+        #expect(
+            rendered.sql
+                == #"INSERT INTO "run_payloads" ("target_id", "run_id", "payload", "source", "version") VALUES ($1, $2, $3, $4, $5) ON CONFLICT ("target_id", "run_id") DO UPDATE SET "payload" = EXCLUDED."payload", "version" = EXCLUDED."version" RETURNING *"#
+        )
+        #expect(rendered.binds.map(\.description) == ["42", "7", "new-payload", "new-source", "3"])
+    }
+
+    @Test func compilesInsertOnConflictDoUpdateWithFourSelectedOverwriteColumns() {
+        let rendered = RunPayloadModel.insert(
+            RunPayloadModel.Insert(targetID: 42, runID: 7, payload: "new-payload", source: "new-source", version: 3)
+        )
+        .onConflict(
+            RunPayloadModel.targetID, RunPayloadModel.runID,
+            doUpdate: RunPayloadModel.payload, RunPayloadModel.source, RunPayloadModel.version, RunPayloadModel.runID
+        )
+        .returningAll()
+        .render()
+        #expect(
+            rendered.sql
+                == #"INSERT INTO "run_payloads" ("target_id", "run_id", "payload", "source", "version") VALUES ($1, $2, $3, $4, $5) ON CONFLICT ("target_id", "run_id") DO UPDATE SET "payload" = EXCLUDED."payload", "source" = EXCLUDED."source", "version" = EXCLUDED."version", "run_id" = EXCLUDED."run_id" RETURNING *"#
+        )
+        #expect(rendered.binds.map(\.description) == ["42", "7", "new-payload", "new-source", "3"])
+    }
+
+    @Test func compilesInsertOnConflictDoUpdateWithNullInsertValuesAndPreservesBindOrder() {
+        let rendered = MutationUserModel.insert(MutationUserModel.Insert(email: nil, name: "fallback-name"))
+            .onConflict(MutationUserModel.email, doUpdate: MutationUserModel.name)
+            .returningAll()
+            .render()
+        #expect(
+            rendered.sql
+                == #"INSERT INTO "users" ("email", "name") VALUES (NULL, $1) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name" RETURNING *"#
+        )
+        #expect(rendered.binds.map(\.description) == ["fallback-name"])
+    }
 
     /// rust-dbkit also returns `id` here; `returning(columns)` is left out, see `docs/rust-parity.md`.
     @Test func compilesUpdateWithFilter() {

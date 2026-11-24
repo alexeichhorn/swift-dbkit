@@ -8,3 +8,12 @@ class UserModel {
     var name: String
     var email: String
 }
+
+@Model(table: "run_payloads")
+class RunPayloadModel {
+    @Key var targetID: Int64
+    @Key var runID: Int64
+    var payload: String
+    var source: String
+    var version: Int64
+}

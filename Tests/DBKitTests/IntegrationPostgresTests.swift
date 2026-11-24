@@ -38,6 +38,80 @@ import Testing
         }
     }
 
+    @Test func onConflictDoNothingIgnoresDuplicateCompositeKey() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let original = try await seedRunPayload(on: tx, 100, 200, payload: "payload-v1", source: "ingest-a", version: 1)
+            #expect(original.payload == "payload-v1")
+
+            let affected = try await RunPayloadModel.insert(
+                RunPayloadModel.Insert(targetID: 100, runID: 200, payload: "payload-v2", source: "ingest-b", version: 2)
+            )
+            .onConflictDoNothing(RunPayloadModel.targetID, RunPayloadModel.runID)
+            .execute(on: tx)
+            #expect(affected == 0)
+
+            let rows = try await runPayloads(100, 200, on: tx)
+            #expect(rows.count == 1)
+            #expect(rows.first?.payload == "payload-v1")
+            #expect(rows.first?.source == "ingest-a")
+            #expect(rows.first?.version == 1)
+        }
+    }
+
+    @Test func onConflictDoNothingWithReturningAllReturnsNoneOnConflict() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedRunPayload(on: tx, 10, 20, payload: "payload-v1", source: "ingest-a", version: 1)
+
+            let row = try await RunPayloadModel.insert(
+                RunPayloadModel.Insert(targetID: 10, runID: 20, payload: "payload-v2", source: "ingest-b", version: 2)
+            )
+            .onConflictDoNothing(RunPayloadModel.targetID, RunPayloadModel.runID)
+            .returningAll()
+            .first(on: tx)
+            #expect(row == nil)
+        }
+    }
+
+    @Test func onConflictDoUpdateUpdatesOnlySelectedColumnsOnConflict() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedRunPayload(on: tx, 500, 600, payload: "payload-v1", source: "ingest-a", version: 1)
+
+            let affected = try await RunPayloadModel.insert(
+                RunPayloadModel.Insert(targetID: 500, runID: 600, payload: "payload-v2", source: "ingest-b", version: 2)
+            )
+            .onConflict(RunPayloadModel.targetID, RunPayloadModel.runID, doUpdate: RunPayloadModel.payload, RunPayloadModel.version)
+            .execute(on: tx)
+            #expect(affected == 1)
+
+            let rows = try await runPayloads(500, 600, on: tx)
+            #expect(rows.count == 1)
+            #expect(rows.first?.payload == "payload-v2")
+            #expect(rows.first?.version == 2)
+            #expect(rows.first?.source == "ingest-a")
+        }
+    }
+
+    @Test func onConflictDoUpdateInsertsWhenNoConflictExists() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let affected = try await RunPayloadModel.insert(
+                RunPayloadModel.Insert(targetID: 700, runID: 800, payload: "payload-v1", source: "ingest-a", version: 1)
+            )
+            .onConflict(RunPayloadModel.targetID, RunPayloadModel.runID, doUpdate: RunPayloadModel.payload, RunPayloadModel.version)
+            .execute(on: tx)
+            #expect(affected == 1)
+
+            let rows = try await runPayloads(700, 800, on: tx)
+            #expect(rows.count == 1)
+            #expect(rows.first?.payload == "payload-v1")
+            #expect(rows.first?.source == "ingest-a")
+            #expect(rows.first?.version == 1)
+        }
+    }
+
     @Test func modelDeleteRemovesRow() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
@@ -367,6 +441,13 @@ private func setupSchema(on tx: Transaction) async throws {
     try await tx.query(
         "CREATE TEMP TABLE order_lines (order_id BIGINT NOT NULL, line_id BIGINT NOT NULL, note TEXT NOT NULL, PRIMARY KEY (order_id, line_id))"
     )
+    try await tx.query(
+        """
+        CREATE TEMP TABLE run_payloads (
+            target_id BIGINT NOT NULL, run_id BIGINT NOT NULL, payload TEXT NOT NULL, source TEXT NOT NULL, version BIGINT NOT NULL,
+            PRIMARY KEY (target_id, run_id)
+        )
+        """)
 }
 
 private func seedUser(on tx: Transaction, name: String, email: String) async throws -> UserModel {
@@ -376,6 +457,20 @@ private func seedUser(on tx: Transaction, name: String, email: String) async thr
 private func seedOrderLine(on tx: Transaction, _ orderID: Int64, _ lineID: Int64, note: String) async throws -> OrderLineModel {
     try #require(
         try await OrderLineModel.insert(OrderLineModel.Insert(orderID: orderID, lineID: lineID, note: note)).returningAll().first(on: tx))
+}
+
+private func seedRunPayload(
+    on tx: Transaction, _ targetID: Int64, _ runID: Int64, payload: String, source: String, version: Int64
+) async throws -> RunPayloadModel {
+    try #require(
+        try await RunPayloadModel.insert(
+            RunPayloadModel.Insert(targetID: targetID, runID: runID, payload: payload, source: source, version: version)
+        )
+        .returningAll().first(on: tx))
+}
+
+private func runPayloads(_ targetID: Int64, _ runID: Int64, on tx: Transaction) async throws -> [RunPayloadModel] {
+    try await RunPayloadModel.query().filter(RunPayloadModel.targetID == targetID).filter(RunPayloadModel.runID == runID).all(on: tx)
 }
 
 private func orderLine(_ orderID: Int64, _ lineID: Int64, on tx: Transaction) async throws -> OrderLineModel? {

@@ -45,12 +45,44 @@ import Testing
             .returningAll()
             .render()
         #expect(insert.sql == #"INSERT INTO "users" ("name", "email", "region") VALUES ($1, $2, NULL) RETURNING *"#)
-        // Waits for slice 6: `.onConflict(UserModel.email, doUpdate: UserModel.name, UserModel.region)` on this insert,
-        // rendering `ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name", "region" = EXCLUDED."region"` before
-        // `RETURNING *`, and the same SQL with the update columns kept in a tuple constant.
+        let upsert = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
+            .onConflict(UserModel.email, doUpdate: UserModel.name, UserModel.region)
+            .returningAll()
+            .render()
+        #expect(
+            upsert.sql
+                == #"INSERT INTO "users" ("name", "email", "region") VALUES ($1, $2, NULL) ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name", "region" = EXCLUDED."region" RETURNING *"#
+        )
+        // Column lists kept in constants render the same upsert.
+        let updates = (UserModel.name, UserModel.region)
+        let stored = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
+            .onConflict(UserModel.email, doUpdate: updates)
+            .returningAll()
+            .render()
+        #expect(stored.sql == upsert.sql)
         // Waits for slices 8, 10 and 26: `TaskModel.update()` setting an enum `state`, `previousState` to `nil` and
         // `attempts` to `TaskModel.attempts + 1`.
         // Waits for slice 21: `TaskModel.delete().whereExists(…)` with a correlated `ProjectModel` subquery.
+    }
+
+    @Test func conflictClausesWithoutTargetAndWithBothColumnListsInConstants() {
+        let ignored = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com")).onConflictDoNothing().render()
+        #expect(ignored.sql == #"INSERT INTO "users" ("name", "email", "region") VALUES ($1, $2, NULL) ON CONFLICT DO NOTHING"#)
+        #expect(ignored.binds.map(\.description) == ["Alex", "a@b.com"])
+
+        let line = OrderLineModel.Insert(orderID: 7, lineID: 8, note: "Updated via upsert")
+        let target = (OrderLineModel.orderID, OrderLineModel.lineID)
+        let updates = (OrderLineModel.note, OrderLineModel.lineID)
+        let stored = OrderLineModel.insert(line).onConflict(target, doUpdate: updates).render()
+        #expect(
+            stored.sql
+                == #"INSERT INTO "order_lines" ("order_id", "line_id", "note") VALUES ($1, $2, $3) ON CONFLICT ("order_id", "line_id") DO UPDATE SET "note" = EXCLUDED."note", "line_id" = EXCLUDED."line_id""#
+        )
+        #expect(stored.binds.map(\.description) == ["7", "8", "Updated via upsert"])
+        let listed = OrderLineModel.insert(line)
+            .onConflict(OrderLineModel.orderID, OrderLineModel.lineID, doUpdate: OrderLineModel.note, OrderLineModel.lineID)
+            .render()
+        #expect(listed.sql == stored.sql)
     }
 
     @Test func insertDefaultsAndMutationsWithoutReturning() {

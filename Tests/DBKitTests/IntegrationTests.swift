@@ -173,8 +173,12 @@ class RolledBackNoteModel {
             ])
             .execute(on: tx)
             #expect(inserted == 2)
-            // Waits for slice 6: inserting "Dup" with `onConflictDoNothing(UserModel.email)` affects 0 rows, then
-            // `onConflict(UserModel.email, doUpdate: UserModel.name).returningAll().first(on:)` renames Alpha to "Alpha 2".
+            let ignored = try await UserModel.insert(UserModel.Insert(name: "Dup", email: "alpha@db.com"))
+                .onConflictDoNothing(UserModel.email).execute(on: tx)
+            #expect(ignored == 0)
+            let upserted = try await UserModel.insert(UserModel.Insert(name: "Alpha 2", email: "alpha@db.com"))
+                .onConflict(UserModel.email, doUpdate: UserModel.name).returningAll().first(on: tx)
+            #expect(upserted?.name == "Alpha 2")
             let alpha = try #require(try await UserModel.query().filter(UserModel.email == "alpha@db.com").first(on: tx))
             var active = alpha.active()
             active.region = "eu"

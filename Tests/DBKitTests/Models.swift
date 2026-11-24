@@ -24,6 +24,15 @@ class OrderLineModel {
     var note: String
 }
 
+@Model(table: "run_payloads")
+class RunPayloadModel {
+    @Key var targetID: Int64
+    @Key var runID: Int64
+    var payload: String
+    var source: String
+    var version: Int64
+}
+
 @Model(table: "nullable_rows")
 class NullableRowModel {
     @Key @AutoIncrement var id: Int64
