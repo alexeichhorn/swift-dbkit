@@ -2,8 +2,8 @@ import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// Expands `@Model`. Members (column storage, the initializer and the columns) go into the class, columns become
-/// read-only, and the `Model` conformance goes into an extension.
+/// Expands `@Model`. Members (column storage, the initializer, the columns and `find`) go into the class, columns
+/// become read-only, and the `Model` conformance goes into an extension.
 public struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -17,7 +17,7 @@ public struct ModelMacro: MemberMacro, MemberAttributeMacro, ExtensionMacro {
             context.diagnose(Diagnostic(node: name, message: MacroExpansionErrorMessage(message)))
         }
         let generator = Generator(model: model)
-        let members = generator.storage() + [generator.memberwiseInit()] + generator.columns()
+        let members = generator.storage() + [generator.memberwiseInit()] + generator.columns() + generator.find()
         return members.map { DeclSyntax(stringLiteral: $0) }
     }
 
@@ -99,18 +99,37 @@ private struct Generator {
         }
     }
 
-    func conformance(for type: String) -> String {
-        """
-        extension \(type): DBKit.Model, @unchecked Sendable {
-            \(access)static var schema: DBKit.Schema {
-                DBKit.Schema(
-                    table: "\(model.table)",
-                    columns: [\(model.fields.map { "\"\($0.column)\"" }.joined(separator: ", "))],
-                    primaryKey: [\(model.keys.map { "\"\($0.column)\"" }.joined(separator: ", "))]
-                )
+    func find() -> [String] {
+        guard model.keys.count == 1, let key = model.keys.first else { return [] }
+        return [
+            """
+            /// Fetches the row with this primary key.
+            \(access)static func find(_ \(key.name): \(key.type), on executor: some DBKit.DatabaseExecutor) async throws -> \(name)? {
+                try await \(name).query().filter(\(name).\(key.name) == \(key.name)).first(on: executor)
             }
-        }
-        """
+            """
+        ]
+    }
+
+    func conformance(for type: String) -> String {
+        let decodeArguments = model.fields.map { "\($0.name): try row.decode((\($0.type)).self, \"\($0.column)\")" }
+        return """
+            extension \(type): DBKit.Model, @unchecked Sendable {
+                \(access)typealias Base = \(name)
+
+                \(access)static var schema: DBKit.Schema {
+                    DBKit.Schema(
+                        table: "\(model.table)",
+                        columns: [\(model.fields.map { "\"\($0.column)\"" }.joined(separator: ", "))],
+                        primaryKey: [\(model.keys.map { "\"\($0.column)\"" }.joined(separator: ", "))]
+                    )
+                }
+
+                \(access)static func decodeBase(from row: DBKit.RowReader) throws -> \(name) {
+                    \(name)(\(decodeArguments.joined(separator: ", ")))
+                }
+            }
+            """
     }
 
     private func parameter(_ field: ModelDescription.Field) -> String {

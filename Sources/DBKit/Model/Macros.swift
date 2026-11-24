@@ -1,4 +1,5 @@
-/// Generates the ``Model`` conformance: static typed columns and a memberwise initializer.
+/// Generates the ``Model`` conformance: static typed columns, a memberwise initializer, row decoding and, for a single
+/// primary key, `find(_:on:)`.
 ///
 /// Models are classes, so a row with loaded relations can be passed wherever the plain model is expected. Columns are
 /// `var`s that `@Model` makes read-only; a Swift default (`var isComplete = false`) becomes the initializer's default.
@@ -18,7 +19,7 @@
 /// ```
 @attached(member, names: arbitrary)
 @attached(memberAttribute)
-@attached(extension, conformances: Model, Sendable, names: named(schema))
+@attached(extension, conformances: Model, Sendable, names: named(Base), named(schema), named(decodeBase))
 public macro Model(table: String? = nil) = #externalMacro(module: "DBKitMacros", type: "ModelMacro")
 
 /// Makes a column read-only. `@Model` adds it to every column; not meant to be written by hand.

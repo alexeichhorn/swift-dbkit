@@ -1,0 +1,40 @@
+import Logging
+import PostgresNIO
+
+/// Something that runs queries: a ``Database`` or a ``Transaction``.
+public protocol DatabaseExecutor: Sendable {
+    var logger: Logger { get }
+
+    /// Runs raw SQL. Interpolated values become bind parameters:
+    /// `try await db.query("SELECT id, title FROM todos WHERE user_id = \(userID)").decode((Int64, String).self)`.
+    func query(_ query: PostgresQuery) async throws -> PostgresRowSequence
+}
+
+extension DatabaseExecutor {
+    /// Runs raw SQL and decodes each row as `model`. Select all of the model's columns, e.g. `SELECT todos.* …`.
+    public func query<M: Model>(_ query: PostgresQuery, as model: M.Type) async throws -> [M.Base] {
+        var models: [M.Base] = []
+        for try await row in try await self.query(query) {
+            models.append(try M.decodeBase(from: RowReader(row: row.makeRandomAccess())))
+        }
+        return models
+    }
+
+    /// Runs the query and turns each row into a value as it arrives. A raw row keeps the network buffer it arrived in
+    /// alive, which can be many times its size, so return the decoded value and not the row.
+    func rows<Value>(_ rendered: RenderedSQL, _ transform: (PostgresRandomAccessRow) throws -> Value) async throws -> [Value] {
+        var values: [Value] = []
+        for try await row in try await query(postgresQuery(rendered)) {
+            values.append(try transform(row.makeRandomAccess()))
+        }
+        return values
+    }
+
+    func postgresQuery(_ rendered: RenderedSQL) throws -> PostgresQuery {
+        var bindings = PostgresBindings(capacity: rendered.binds.count)
+        for bind in rendered.binds {
+            try bindings.append(bind.value)
+        }
+        return PostgresQuery(unsafeSQL: rendered.sql, binds: bindings)
+    }
+}
