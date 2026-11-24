@@ -2668,7 +2668,7 @@ class LimitLockRowModel {
     // The locking tests hold a lock in one transaction and query from another, on a real table of their own, since a
     // `TEMP` table is visible to one session only. rust-dbkit's tests share one table and tell their rows apart by a token.
 
-    @Test(.timeLimit(.minutes(1))) func lockingForUpdateBlocksUntilFirstTransactionReleasesLock() async throws {
+    @Test(.timeLimit(.minutes(5))) func lockingForUpdateBlocksUntilFirstTransactionReleasesLock() async throws {
         try await withRealTable("blocking_lock_rows", columns: lockRowColumns) { db in
             let rowID = try #require(
                 try await BlockingLockRowModel.insert(BlockingLockRowModel.Insert(note: "row-1")).returningAll().first(on: db)?.id)

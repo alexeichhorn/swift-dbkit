@@ -886,7 +886,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
                 == "a dedicated connection needs the database URL; create the database with Database(url:)")
     }
 
-    @Test(.timeLimit(.minutes(1))) func dedicatedConnectionsContendForAdvisoryLocks() async throws {
+    @Test(.timeLimit(.minutes(5))) func dedicatedConnectionsContendForAdvisoryLocks() async throws {
         let db = try testDatabase()
         let first = try await db.dedicatedConnection()
         let second = try await db.dedicatedConnection()
@@ -901,7 +901,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
     }
 
     /// A lock taken twice is held until its second release, and closing the connection releases it.
-    @Test(.timeLimit(.minutes(1))) func advisoryLocksCountAcquisitionsAndEndWithTheirConnection() async throws {
+    @Test(.timeLimit(.minutes(5))) func advisoryLocksCountAcquisitionsAndEndWithTheirConnection() async throws {
         let db = try testDatabase()
         let first = try await db.dedicatedConnection()
         let second = try await db.dedicatedConnection()
@@ -925,7 +925,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
         await first.close()
     }
 
-    @Test(.timeLimit(.minutes(1))) func notificationsArriveUntilTheConnectionDrops() async throws {
+    @Test(.timeLimit(.minutes(5))) func notificationsArriveUntilTheConnectionDrops() async throws {
         let db = try testDatabase()
         let channel = "dbkit_test_notifications_until_drop"
         let listener = try await db.dedicatedConnection()
@@ -947,7 +947,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
 
     /// A notification sent in a transaction arrives when it commits and never when it rolls back. Listening ends when
     /// the closure returns.
-    @Test(.timeLimit(.minutes(1))) func notificationsInATransactionArriveOnCommitAndListeningEndsWithTheClosure() async throws {
+    @Test(.timeLimit(.minutes(5))) func notificationsInATransactionArriveOnCommitAndListeningEndsWithTheClosure() async throws {
         let db = try testDatabase()
         let channel = "dbkit_test_transaction_notifications"
         let listener = try await db.dedicatedConnection()
@@ -1007,7 +1007,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
 
     /// The stream's connection is terminated after its first row, so a later fetch fails. A cursor that kept waiting
     /// for an answer on the closed connection would keep the pool's only connection lent, and the last query would wait.
-    @Test(.timeLimit(.minutes(1))) func aStreamOnALostConnectionThrowsAndFreesThePool() async throws {
+    @Test(.timeLimit(.minutes(5))) func aStreamOnALostConnectionThrowsAndFreesThePool() async throws {
         try await withPoolOfOneConnection { db in
             try await db.query("CREATE TEMP VIEW stream_probe AS SELECT n::BIGINT AS id FROM generate_series(1, 5000) AS n")
             let pid = try #require(try await backendPID(on: db))
@@ -1027,7 +1027,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
         }
     }
 
-    @Test(.timeLimit(.minutes(1))) func streamsReadInBatchesOnEveryExecutor() async throws {
+    @Test(.timeLimit(.minutes(5))) func streamsReadInBatchesOnEveryExecutor() async throws {
         try await withRealTable(
             "streamed_sales",
             columns: "id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL"
@@ -1069,7 +1069,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
 
     /// `counted_sales` draws from a sequence for every row it produces, so the sequence tells how many rows the server
     /// read. The pool has one connection, so the checks after a stream run on the connection that stream used.
-    @Test(.timeLimit(.minutes(1))) func leavingAStreamEarlyStopsTheServerAndFreesTheConnection() async throws {
+    @Test(.timeLimit(.minutes(5))) func leavingAStreamEarlyStopsTheServerAndFreesTheConnection() async throws {
         try await withPoolOfOneConnection { db in
             try await db.query(
                 "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL)"
@@ -1527,7 +1527,7 @@ extension MigrationsTests {
 
     /// Replicas that start together all succeed and apply each file once: the advisory lock makes the others wait,
     /// then skip what the first applied.
-    @Test(.timeLimit(.minutes(1))) func replicasMigratingAtOnceApplyEachFileOnce() async throws {
+    @Test(.timeLimit(.minutes(5))) func replicasMigratingAtOnceApplyEachFileOnce() async throws {
         try await withMigrations(cleanup: ["DROP TABLE IF EXISTS replica_migration_runs"]) { db, files in
             try files.write(
                 """

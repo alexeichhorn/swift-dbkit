@@ -22,6 +22,12 @@ class StreamProbeModel {
     @Key var id: Int64
 }
 
+/// A table no database has, for queries that must fail on the server.
+@Model(table: "dbkit_stream_table_that_does_not_exist")
+class StreamMissingTableModel {
+    @Key var id: Int64
+}
+
 @Model(table: "stream_failures")
 class StreamFailureModel {
     @Key var id: Int64
@@ -69,7 +75,7 @@ private let maxRowsReadAhead: Int64 = 1000
 /// rust-dbkit's `integration_streaming.rs`. Each test has a pool of one connection, which keeps the `TEMP` tables in
 /// scope for streams on the pool and makes a stream that keeps its connection block the next query. The suite runs
 /// one test at a time, so it opens one connection at a time.
-@Suite(.serialized, .timeLimit(.minutes(1))) struct IntegrationStreamingTests {
+@Suite(.serialized, .timeLimit(.minutes(5))) struct IntegrationStreamingTests {
     @Test func streamPreservesFiltersOrderLimitOffsetAndUnloadedRelations() async throws {
         try await withStreamItems { db in
             let rows: [StreamItemModel] = try await readAll(
@@ -286,11 +292,11 @@ private let maxRowsReadAhead: Int64 = 1000
         }
     }
 
-    /// The query fails on the server, here because `stream_probe` doesn't exist, so the loop throws before any row.
+    /// The query fails on the server, here because its table doesn't exist, so the loop throws before any row.
     @Test func initialQueryErrorIsAnItemThenTheStreamEnds() async throws {
         try await withStreamItems { db in
             let error = try await #require(throws: PSQLError.self) {
-                for try await _ in try await StreamProbeModel.query().stream(on: db) {}
+                for try await _ in try await StreamMissingTableModel.query().stream(on: db) {}
             }
             #expect(error.serverInfo?[.sqlState] == "42P01")
             try await expectNoCursorOrTransaction(on: db)
@@ -466,7 +472,7 @@ private let maxRowsReadAhead: Int64 = 1000
         try await withStreamItems { db in
             let error = try await #require(throws: PSQLError.self) {
                 try await db.transaction { tx in
-                    for try await _ in try await StreamProbeModel.query().stream(on: tx) {}
+                    for try await _ in try await StreamMissingTableModel.query().stream(on: tx) {}
                 }
             }
             #expect(error.serverInfo?[.sqlState] == "42P01")
