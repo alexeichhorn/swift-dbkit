@@ -347,16 +347,16 @@ class MixedNumberModel {
             #expect(directRows.map(\.2) == [true, true, false, nil])
             #expect(directRows.map(\.3) == [true, true, true, nil])
 
-            let greater = try await NullableArithmeticRecordModel.query()
+            let greaterRows = try await NullableArithmeticRecordModel.query()
                 .filter(NullableArithmeticRecordModel.requiredValue > NullableArithmeticRecordModel.nullableLeft + 1)
                 .all(on: tx)
-            #expect(greater.map(\.id) == [1])
+            #expect(greaterRows.map(\.id) == [1])
 
-            let lessOrEqual = try await NullableArithmeticRecordModel.query()
+            let lessOrEqualRows = try await NullableArithmeticRecordModel.query()
                 .filter(NullableArithmeticRecordModel.requiredValue <= NullableArithmeticRecordModel.nullableLeft + 1)
                 .orderBy(NullableArithmeticRecordModel.id.asc)
                 .all(on: tx)
-            #expect(lessOrEqual.map(\.id) == [2, 3])
+            #expect(lessOrEqualRows.map(\.id) == [2, 3])
         }
     }
 }
