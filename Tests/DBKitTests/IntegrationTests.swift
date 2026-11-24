@@ -573,6 +573,133 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
         }
     }
 
+    /// `count`, `exists` and `paginate` count each user or todo once, however the joins multiply or filter rows. See
+    /// "Counting a query with joins" in `docs/rust-parity.md`; rust-dbkit counts the joined rows.
+    @Test func countExistsAndPaginateCountEachBaseRowOnceAcrossJoins() async throws {
+        try await withRollback { tx in
+            let (alex, _) = try await seedTodos(on: tx)
+            try await TagModel.insert(TagModel.Insert(name: "later")).execute(on: tx)
+
+            // Alex's two todos join him twice.
+            let todos: Query<UserModel.Loaded<[TodoModel]>> = UserModel.query().with(\.todos, .joined)
+            #expect(try await todos.count(on: tx) == 2)
+            #expect(try await TodoModel.query().with(\.user, .joined).count(on: tx) == 2)
+            #expect(try await UserModel.query().join(\.todos).count(on: tx) == 1)
+            #expect(try await UserModel.query().leftJoin(\.todos).count(on: tx) == 2)
+            #expect(try await TodoModel.query().filter(TodoModel.Relations.user.name == "Alex").count(on: tx) == 2)
+            // "Buy milk" has two tags.
+            #expect(try await TodoModel.query().join(\.tags).count(on: tx) == 1)
+            #expect(try await TodoModel.query().with(\.tags, .joined).count(on: tx) == 2)
+            // Each of the two tag links joins the two other tags.
+            let otherTags = TodoTagModel.query().join(TagModel.self, on: TagModel.id != TodoTagModel.tagID)
+            #expect(try await otherTags.count(on: tx) == 2)
+
+            // The kit counted without the join, so PostgreSQL rejected this filter.
+            let shipping = todos.filter(TodoModel.title == "Ship it")
+            #expect(try await shipping.count(on: tx) == 1)
+            #expect(try await shipping.exists(on: tx))
+            let nothing = todos.filter(TodoModel.title == "Nothing")
+            #expect(try await nothing.count(on: tx) == 0)
+            #expect(try await nothing.exists(on: tx) == false)
+
+            let page = try await shipping.orderBy(UserModel.id.asc).paginate(page: 1, perPage: 10, on: tx)
+            #expect(page.total == 1 && page.totalPages == 1)
+            #expect(page.items.map(\.id) == [alex.id])
+            #expect(page.items.first?.todos.map(\.title) == ["Ship it"])
+        }
+    }
+
+    /// With a joined to-many load, `LIMIT` applies to the joined rows (see "Select-In vs Joined" in
+    /// `docs/relations.md`) while `total` counts users: a page of two holds Alex with both todos, and Sam isn't on it.
+    @Test func paginateWithAJoinedToManyLoadLimitsJoinedRows() async throws {
+        try await withRollback { tx in
+            _ = try await seedTodos(on: tx)
+
+            let joined = try await UserModel.query()
+                .with(\.todos, .joined)
+                .orderBy(UserModel.id.asc)
+                .orderBy(TodoModel.id.asc)
+                .paginate(page: 1, perPage: 2, on: tx)
+            #expect(joined.total == 2 && joined.totalPages == 1)
+            #expect(joined.items.map(\.name) == ["Alex"])
+            #expect(joined.items.first?.todos.map(\.title) == ["Buy milk", "Ship it"])
+
+            let selectIn = try await UserModel.query().with(\.todos).orderBy(UserModel.id.asc).paginate(page: 1, perPage: 2, on: tx)
+            #expect(selectIn.total == 2)
+            #expect(selectIn.items.map(\.name) == ["Alex", "Sam"])
+        }
+    }
+
+    @Test func paginateReadsEachPageAndCountsAllRows() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            try await seedUsers(on: tx)
+            let users = UserModel.query().orderBy(UserModel.id.asc)
+
+            let first = try await users.paginate(page: 1, perPage: 2, on: tx)
+            #expect(first.items.map(\.name) == ["Alex", "Sam"])
+            #expect(first.page == 1 && first.perPage == 2 && first.total == 3 && first.totalPages == 2)
+            let last = try await users.paginate(page: 2, perPage: 2, on: tx)
+            #expect(last.items.map(\.name) == ["Kim"] && last.totalPages == 2)
+            let pastTheEnd = try await users.paginate(page: 3, perPage: 2, on: tx)
+            #expect(pastTheEnd.items.isEmpty && pastTheEnd.page == 3 && pastTheEnd.total == 3 && pastTheEnd.totalPages == 2)
+            let single = try await users.paginate(page: 3, perPage: 1, on: tx)
+            #expect(single.items.map(\.name) == ["Kim"] && single.totalPages == 3)
+            let whole = try await users.paginate(page: 1, perPage: 3, on: tx)
+            #expect(whole.items.count == 3 && whole.totalPages == 1)
+
+            let empty = try await users.filter(UserModel.region == "mars").paginate(page: 1, perPage: 2, on: tx)
+            #expect(empty.items.isEmpty && empty.total == 0 && empty.totalPages == 0)
+        }
+    }
+
+    /// `paginate` counts without the ordering, then reads the page with it.
+    @Test func paginateSendsTheCountAndThenThePage() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            try await seedUsers(on: tx)
+            let db = RecordingExecutor(base: tx)
+
+            let page = try await UserModel.query().filter(UserModel.id > 1).orderBy(UserModel.name.asc).paginate(
+                page: 2, perPage: 1, on: db)
+            #expect(page.items.map(\.name) == ["Sam"] && page.total == 2)
+            #expect(
+                await db.log.statements == [
+                    #"SELECT COUNT(*) FROM (SELECT "users".* FROM "users" WHERE "users"."id" > $1) AS "count""#,
+                    #"SELECT "users".* FROM "users" WHERE "users"."id" > $1 ORDER BY "users"."name" ASC LIMIT 1 OFFSET 1"#,
+                ])
+        }
+    }
+
+    /// The query's own `LIMIT` and `OFFSET` apply to `all` only, as in rust-dbkit.
+    @Test func countExistsAndPaginateIgnoreTheQuerysOwnLimitAndOffset() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            try await seedUsers(on: tx)
+            let skipped = UserModel.query().orderBy(UserModel.id.asc).limit(1).offset(5)
+
+            #expect(try await skipped.all(on: tx).isEmpty)
+            #expect(try await skipped.count(on: tx) == 3)
+            #expect(try await skipped.exists(on: tx))
+            let page = try await skipped.paginate(page: 1, perPage: 2, on: tx)
+            #expect(page.items.map(\.name) == ["Alex", "Sam"] && page.total == 3)
+        }
+    }
+
+    @Test func countAndExistsOfAProjectionCountItsRows() async throws {
+        try await withRollback { tx in
+            _ = try await seedTodos(on: tx)
+            try await UserModel.insert(UserModel.Insert(name: "Kim", email: "kim@example.com", region: "us")).execute(on: tx)
+
+            // Alex and Sam have no region.
+            let regions = UserModel.query().select(UserModel.region).groupBy(UserModel.region)
+            #expect(try await regions.count(on: tx) == 2)
+            #expect(try await regions.filter(UserModel.region == "eu").exists(on: tx) == false)
+            // A projection's rows are its joined rows: Alex once per todo.
+            #expect(try await UserModel.query().join(\.todos).select(UserModel.name).count(on: tx) == 2)
+        }
+    }
+
     @Test func mutationsAndActiveModels() async throws {
         try await withRollback { tx in
             try await createUsers(on: tx)
@@ -603,7 +730,11 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             let renamed = try await UserModel.update().set(UserModel.region, to: nil).filter(UserModel.region == "us").execute(on: tx)
             #expect(renamed == 1)
             #expect(try await saved.delete(on: tx) == 1)
-            // Waits for slice 23: `count(on:) == 2`, `exists(on:)` for beta, `paginate(page: 2, perPage: 1, on:)`.
+            #expect(try await UserModel.query().count(on: tx) == 2)
+            #expect(try await UserModel.query().filter(UserModel.email == "beta@db.com").exists(on: tx))
+
+            let page = try await UserModel.query().orderBy(UserModel.id.asc).paginate(page: 2, perPage: 1, on: tx)
+            #expect(page.items.map(\.name) == ["Beta"] && page.total == 2 && page.totalPages == 2)
             // Waits for slice 25: `stream(on:)` yields "Alpha 2" and "Beta".
         }
     }
@@ -656,7 +787,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             var active = row.active()
             active.note = "changed"
             #expect(try await active.update(on: tx).note == "changed")
-            #expect(try await HintModel.query().filter(HintModel.note == "changed").all(on: tx).count == 1)
+            #expect(try await HintModel.query().filter(HintModel.note == "changed").count(on: tx) == 1)
             #expect(try await row.delete(on: tx) == 1)
             #expect(try await HintModel.query().orderBy(HintModel.name.asc).all(on: tx).map(\.note) == ["same name", "same region"])
         }
@@ -683,8 +814,7 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
                     throw Abort()
                 }
             }
-            let notes = try await RolledBackNoteModel.query().all(on: db)
-            #expect(notes.isEmpty)
+            #expect(try await RolledBackNoteModel.query().count(on: db) == 0)
 
             try await db.transaction { tx in
                 // Waits for slice 24: `tx.setLocal("statement_timeout", "5s")` before the lock, read back after it with
@@ -739,8 +869,8 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
                 .filter((DocumentModel.accessMask & 0b0010) != 0)
                 .filter(SQL.interval(hours: 2) == DocumentModel.leaseWindow)
                 .filter(DocumentModel.kind == "note")
-                .all(on: tx)
-            #expect(masked.count == 1)
+                .count(on: tx)
+            #expect(masked == 1)
 
             try await tx.query(
                 "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL)"
@@ -803,8 +933,8 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
             )
             try await tx.query("INSERT INTO sales (region, amount, created_at) VALUES ('read', 1, \(stored + "+00")::timestamptz)")
             let read = try #require(try await SaleModel.query().first(on: tx))
-            #expect(try await SaleModel.query().filter(SaleModel.createdAt == read.createdAt).all(on: tx).count == 1)
-            #expect(try await SaleModel.query().filter(SaleModel.createdAt == Expr<Date?>.value(read.createdAt)).all(on: tx).count == 1)
+            #expect(try await SaleModel.query().filter(SaleModel.createdAt == read.createdAt).count(on: tx) == 1)
+            #expect(try await SaleModel.query().filter(SaleModel.createdAt == Expr<Date?>.value(read.createdAt)).count(on: tx) == 1)
 
             var active = read.active()
             active.createdAt = read.createdAt

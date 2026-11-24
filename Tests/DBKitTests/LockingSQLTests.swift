@@ -91,9 +91,23 @@ import Testing
         #expect(rendered.binds.isEmpty)
     }
 
-    // Waits for slice 23: `compileWithoutPaginationOmitsLockingForCountExistsSubqueries`, the SQL `count(on:)` and
-    // `exists(on:)` send for `filter(UserModel.email == "worker@example.com").orderBy(UserModel.id.desc).limit(5)
-    // .offset(10).forUpdate(.skipLocked)`, which counts the filtered rows without the lock, ordering and pagination.
+    /// rust-dbkit checks the query it wraps; here it is the SQL `count(on:)` and `exists(on:)` send.
+    @Test func compileWithoutPaginationOmitsLockingForCountExistsSubqueries() async throws {
+        let query = UserModel.query()
+            .filter(UserModel.email == "worker@example.com")
+            .orderBy(UserModel.id.desc)
+            .limit(5)
+            .offset(10)
+            .forUpdate(.skipLocked)
+
+        let count = try await firstQuery { _ = try await query.count(on: $0) }
+        #expect(count.sql == #"SELECT COUNT(*) FROM (SELECT "users".* FROM "users" WHERE "users"."email" = $1) AS "count""#)
+        #expect(count.bindCount == 1)
+
+        let exists = try await firstQuery { _ = try await query.exists(on: $0) }
+        #expect(exists.sql == #"SELECT EXISTS (SELECT "users".* FROM "users" WHERE "users"."email" = $1)"#)
+        #expect(exists.bindCount == 1)
+    }
 
     /// rust-dbkit adds the joined loader's columns and joins to the compiled query; here a joined load shares the
     /// explicit inner join.

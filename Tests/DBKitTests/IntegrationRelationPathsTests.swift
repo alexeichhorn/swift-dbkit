@@ -471,17 +471,22 @@ import Testing
                 .filter(PathRecordModel.Relations.owner.enabled == true)
                 .with(\.owner, .joined)
                 .orderBy(PathRecordModel.id.asc)
-            // Waits for slice 23: `count(on:)` of `query.limit(1).offset(50)` is 3 and its `exists(on:)` is true.
+            #expect(try await query.limit(1).offset(50).count(on: tx) == 3)
+            #expect(try await query.limit(1).offset(50).exists(on: tx))
             let first = try #require(try await query.first(on: tx))
             #expect(first.id == 1)
             #expect(first.owner?.id == 1)
-            // Waits for slice 23: `paginate(page: 2, perPage: 2, on:)` has a total of 3 in 2 pages, and its one item
-            // is record 4 with owner 3.
+            let page = try await query.paginate(page: 2, perPage: 2, on: tx)
+            #expect(page.total == 3)
+            #expect(page.totalPages == 2)
+            #expect(page.items.map(\.id) == [4])
+            #expect(page.items.first?.owner?.id == 3)
 
             let empty = PathRecordModel.query()
                 .filter(PathRecordModel.Relations.owner.score > 100)
                 .with(\.owner, .joined)
-            // Waits for slice 23: `count(on:)` of `empty` is 0 and its `exists(on:)` is false.
+            #expect(try await empty.count(on: tx) == 0)
+            #expect(try await empty.exists(on: tx) == false)
             #expect(try await empty.first(on: tx) == nil)
             #expect(try await empty.all(on: tx).isEmpty)
         }

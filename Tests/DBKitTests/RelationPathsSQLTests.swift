@@ -771,9 +771,29 @@ import Testing
         )
     }
 
-    // Waits for slice 23: count_and_exists_include_filter_joins_without_loading_columns, `count(on:)` and `exists(on:)` of
-    // `PathRecordModel.query().filter(PathRecordModel.Relations.owner.enabled == true).with(\.owner, .joined).limit(1)
-    // .offset(2)` keep the owner join and its filter, without the loaded columns, `LIMIT` or `OFFSET`.
+    /// A count keeps the joins and counts each record once (see "Counting a query with joins" in
+    /// `docs/rust-parity.md`); `exists` needs no `DISTINCT`.
+    @Test func countAndExistsIncludeFilterJoinsWithoutLoadingColumns() async throws {
+        let query: Query<PathRecordModel.Loaded<PathMemberModel?>> = PathRecordModel.query()
+            .filter(PathRecordModel.Relations.owner.enabled == true)
+            .with(\.owner, .joined)
+            .limit(1)
+            .offset(2)
+
+        let count = try await firstQuery { _ = try await query.count(on: $0) }
+        #expect(
+            count.sql
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "path_records"."id" FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE "path_members"."enabled" = $1) AS "count""#
+        )
+        #expect(count.bindCount == 1)
+
+        let exists = try await firstQuery { _ = try await query.exists(on: $0) }
+        #expect(
+            exists.sql
+                == #"SELECT EXISTS (SELECT "path_records".* FROM "path_records" LEFT JOIN "path_members" ON "path_members"."id" = "path_records"."owner_id" WHERE "path_members"."enabled" = $1)"#
+        )
+        #expect(exists.bindCount == 1)
+    }
 }
 
 /// Each bind as `<type>(<value>)`, since a bind's numeric type is the one PostgreSQL computes in.

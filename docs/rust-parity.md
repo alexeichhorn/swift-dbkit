@@ -65,6 +65,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 
 - **Regex flags.** `SQL.regexReplace` and `SQL.regexSplit` default their flags to none, so a call without flags replaces the first match and splits case-sensitively. rust-dbkit requires the flags argument.
 - **Lock scope with joins.** A lock on a query with any join is scoped to the query's own table (`FOR UPDATE OF "users"`), so joined rows stay unlocked. rust-dbkit scopes the lock only when the query has a left join; with inner joins it locks the joined rows too.
+- **Page numbers.** `paginate(page:perPage:on:)` traps for page 0 or `perPage` 0, which are programmer errors. rust-dbkit treats 0 as 1.
 - **Counting a query with joins.** rust-dbkit counts the rows of the joined query, so a user with three joined todos counts three times. `count`, `exists` and `paginate` here count distinct rows of the query's own model.
 - **Updating an active model with nothing assigned.** `update(on:)` sends no query and returns the row unchanged. rust-dbkit returns an error.
 - **Changing a key column on an active model.** The update filters by the key the row was loaded with, so assigning a primary key column moves the row to the new key. rust-dbkit never writes key columns and filters by the assigned key, so it reports the row as not found.

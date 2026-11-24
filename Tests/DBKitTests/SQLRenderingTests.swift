@@ -768,4 +768,104 @@ class LeaseModel {
         #expect(deleted.sql == #"DELETE FROM "todos" WHERE "todos"."user_id" = $1 RETURNING *"#)
         #expect(deleted.binds.map(\.description) == ["2"])
     }
+
+    @Test func countAndExistsWithoutJoinsWrapTheQuery() async throws {
+        let query = UserModel.query().filter(UserModel.name == "Alex")
+        let count = try await countSQL(query)
+        #expect(count == #"SELECT COUNT(*) FROM (SELECT "users".* FROM "users" WHERE "users"."name" = $1) AS "count""#)
+        let exists = try await existsSQL(query)
+        #expect(exists == #"SELECT EXISTS (SELECT "users".* FROM "users" WHERE "users"."name" = $1)"#)
+    }
+
+    /// With any join, a count keeps the joins and counts the query's keys once each, so a join that multiplies rows
+    /// doesn't change it; `exists` keeps the joins without `DISTINCT`. See "Counting a query with joins" in
+    /// `docs/rust-parity.md`.
+    @Test func countAndExistsWithJoinedLoadsKeepTheJoinsWithoutTheirColumns() async throws {
+        let user: Query<TodoModel.Loaded<UserModel?, NotLoaded>> = TodoModel.query().with(\.user, .joined)
+        let userCount = try await countSQL(user)
+        #expect(
+            userCount
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "todos"."id" FROM "todos" LEFT JOIN "users" ON "users"."id" = "todos"."user_id") AS "count""#
+        )
+        let userExists = try await existsSQL(user)
+        #expect(userExists == #"SELECT EXISTS (SELECT "todos".* FROM "todos" LEFT JOIN "users" ON "users"."id" = "todos"."user_id")"#)
+
+        // The kit left the join out, leaving the filter on `todos` without its table.
+        let todos: Query<UserModel.Loaded<[TodoModel]>> = UserModel.query().with(\.todos, .joined).filter(TodoModel.title == "Ship it")
+        let todosCount = try await countSQL(todos)
+        #expect(
+            todosCount
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "users"."id" FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id" WHERE "todos"."title" = $1) AS "count""#
+        )
+        let todosExists = try await existsSQL(todos)
+        #expect(
+            todosExists
+                == #"SELECT EXISTS (SELECT "users".* FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id" WHERE "todos"."title" = $1)"#
+        )
+    }
+
+    @Test func countWithExplicitCustomPathAndManyToManyJoinsCountsDistinctKeys() async throws {
+        let inner = try await countSQL(UserModel.query().join(\.todos))
+        #expect(
+            inner
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "users"."id" FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id") AS "count""#
+        )
+        let outer = try await countSQL(UserModel.query().leftJoin(\.todos))
+        #expect(
+            outer
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "users"."id" FROM "users" LEFT JOIN "todos" ON "todos"."user_id" = "users"."id") AS "count""#
+        )
+        let innerExists = try await existsSQL(UserModel.query().join(\.todos))
+        #expect(innerExists == #"SELECT EXISTS (SELECT "users".* FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id")"#)
+        // Every column of a composite key.
+        let custom = try await countSQL(TodoTagModel.query().join(TagModel.self, on: TagModel.id != TodoTagModel.tagID))
+        #expect(
+            custom
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "todo_tags"."todo_id", "todo_tags"."tag_id" FROM "todo_tags" JOIN "tags" ON "tags"."id" <> "todo_tags"."tag_id") AS "count""#
+        )
+        let path = try await countSQL(TodoModel.query().filter(TodoModel.Relations.user.name == "Alex"))
+        #expect(
+            path
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "todos"."id" FROM "todos" LEFT JOIN "users" ON "users"."id" = "todos"."user_id" WHERE "users"."name" = $1) AS "count""#
+        )
+        let manyToMany = try await countSQL(TodoModel.query().join(\.tags))
+        #expect(
+            manyToMany
+                == #"SELECT COUNT(*) FROM (SELECT DISTINCT "todos"."id" FROM "todos" JOIN "todo_tags" ON "todo_tags"."todo_id" = "todos"."id" JOIN "tags" ON "tags"."id" = "todo_tags"."tag_id") AS "count""#
+        )
+    }
+
+    /// A projection counts the rows it returns, joined or grouped, without its ordering and pagination.
+    @Test func countAndExistsOfAProjectionWrapIt() async throws {
+        let regions = UserModel.query().select(UserModel.region).groupBy(UserModel.region).orderBy(UserModel.region.asc).limit(2)
+        let count = try await firstQuery { _ = try await regions.count(on: $0) }
+        #expect(count.sql == #"SELECT COUNT(*) FROM (SELECT "users"."region" FROM "users" GROUP BY "users"."region") AS "count""#)
+        let exists = try await firstQuery { _ = try await regions.exists(on: $0) }
+        #expect(exists.sql == #"SELECT EXISTS (SELECT "users"."region" FROM "users" GROUP BY "users"."region")"#)
+
+        let names = UserModel.query().join(\.todos).select(UserModel.name)
+        let joined = try await firstQuery { _ = try await names.count(on: $0) }
+        #expect(
+            joined.sql
+                == #"SELECT COUNT(*) FROM (SELECT "users"."name" FROM "users" JOIN "todos" ON "todos"."user_id" = "users"."id") AS "count""#
+        )
+    }
+
+    /// `page` is 1-based and `perPage` positive, as in the kit. rust-dbkit treats 0 as 1 for both.
+    @Test func paginateRejectsPageOrPerPageZero() async {
+        await #expect(processExitsWith: .failure) {
+            _ = try? await UserModel.query().paginate(page: 0, perPage: 10, on: FirstQueryExecutor())
+        }
+        await #expect(processExitsWith: .failure) {
+            _ = try? await UserModel.query().paginate(page: 1, perPage: 0, on: FirstQueryExecutor())
+        }
+    }
+}
+
+private func countSQL<Row>(_ query: Query<Row>) async throws -> String {
+    try await firstQuery { _ = try await query.count(on: $0) }.sql
+}
+
+private func existsSQL<Row>(_ query: Query<Row>) async throws -> String {
+    try await firstQuery { _ = try await query.exists(on: $0) }.sql
 }

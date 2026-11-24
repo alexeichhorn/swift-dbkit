@@ -397,6 +397,37 @@ class LimitLockRowModel {
         }
     }
 
+    @Test func queryHelpersCountExistsFirstPaginate() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let user1 = try await seedUser(on: tx, name: "PageOne", email: "page1@db.com")
+            let user2 = try await seedUser(on: tx, name: "PageTwo", email: "page2@db.com")
+            let user3 = try await seedUser(on: tx, name: "PageThree", email: "page3@db.com")
+
+            #expect(try await UserModel.query().count(on: tx) == 3)
+            #expect(try await UserModel.query().filter(UserModel.email == "page2@db.com").count(on: tx) == 1)
+            #expect(try await UserModel.query().filter(UserModel.email == "page2@db.com").exists(on: tx))
+            #expect(try await UserModel.query().filter(UserModel.email == "missing@db.com").exists(on: tx) == false)
+
+            let first = try await UserModel.query().orderBy(UserModel.id.asc).first(on: tx)
+            #expect(first?.id == user1.id)
+
+            let page1 = try await UserModel.query().orderBy(UserModel.id.asc).paginate(page: 1, perPage: 2, on: tx)
+            #expect(page1.items.map(\.id) == [user1.id, user2.id])
+            #expect(page1.page == 1)
+            #expect(page1.perPage == 2)
+            #expect(page1.total == 3)
+            #expect(page1.totalPages == 2)
+
+            let page2 = try await UserModel.query().orderBy(UserModel.id.asc).paginate(page: 2, perPage: 2, on: tx)
+            #expect(page2.items.map(\.id) == [user3.id])
+            #expect(page2.page == 2)
+            #expect(page2.perPage == 2)
+            #expect(page2.total == 3)
+            #expect(page2.totalPages == 2)
+        }
+    }
+
     @Test func manyToManySelectinLoadsChildren() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)
