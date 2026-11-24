@@ -7,7 +7,8 @@ The package is being built; its guides arrive feature by feature.
 
 ## Quick Intro
 
-Declare models as classes with `@Model`. Columns are `var`s that `@Model` makes read-only, optionally with a default.
+Declare models as classes with `@Model`. Columns are `var`s that `@Model` makes read-only, optionally with a default;
+relations are `var`s of their loaded type.
 
 ```swift
 @Model(table: "users")
@@ -15,6 +16,7 @@ class UserModel {
     @Key @AutoIncrement var id: Int64
     var name: String
     @Unique var email: String
+    @HasMany var todos: [TodoModel]
 }
 
 @Model(table: "todos")
@@ -23,6 +25,7 @@ class TodoModel {
     @Index var userID: Int64
     var title: String
     var isComplete: Bool = false
+    @BelongsTo(key: "userID") var user: UserModel?
 }
 ```
 
@@ -33,12 +36,28 @@ let db = try Database(url: "postgres://app:secret@localhost:5432/app")
 let users = try await UserModel.query()
     .filter(UserModel.email.ilike("%@example.com"))
     .orderBy(UserModel.name.asc)
+    .with(\.todos)
     .all(on: db)
 
 for user in users {
-    print("\(user.name) <\(user.email)>")
+    for todo in user.todos {
+        print("\(user.name) / \(todo.title)")
+    }
 }
 ```
+
+The loaded graph is part of the type, and loaded rows are still plain models:
+
+```swift
+func sendDigest(to user: UserModel) { … }                  // any user row
+func sendTodoList(to user: UserModel.WithTodos) { … }      // only users loaded with .with(\.todos)
+
+sendDigest(to: user)       // ✅ also a loaded user
+sendTodoList(to: user)     // ✅ only compiles after .with(\.todos)
+```
+
+Reading `user.todos` without `.with(\.todos)` doesn't compile: "relation 'todos' is not loaded; add
+.with(\.todos) to the query".
 
 Without a database, `render()` shows a query's SQL and binds:
 
@@ -64,7 +83,7 @@ with a value or column of another type doesn't compile.
 
 ## Common Mutations
 
-Insert with the generated `Insert` type. Auto-increment keys are left out; columns with a Swift default
+Insert with the generated `Insert` type. Auto-increment keys and relations are left out; columns with a Swift default
 (`var isComplete: Bool = false`, `var id: UUID = UUID()`) and optional columns can be omitted. Defaults are evaluated
 per insert:
 
@@ -94,6 +113,7 @@ Use the `update()` / `delete()` builders for bulk or conditional mutations.
 
 - [Querying](docs/querying.md)
 - [Mutations](docs/mutations.md)
+- [Relations](docs/relations.md) (including why models are classes)
 - [Expressions and aggregation](docs/expressions.md)
 - [PostgreSQL string functions](docs/string-functions.md)
 - [Postgres types](docs/postgres-types.md)
