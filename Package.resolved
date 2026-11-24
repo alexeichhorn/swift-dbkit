@@ -1,5 +1,5 @@
 {
-  "originHash" : "bd1706db876eccffc5ad9710f99ddd75a2f7099ecb4662de7b0f83cd5d550056",
+  "originHash" : "daac0727e32c086be41ccba6ca256430cb6e9aa4fead6ebbed6d3f8cab922e8e",
   "pins" : [
     {
       "identity" : "postgres-nio",
@@ -107,6 +107,15 @@
       "state" : {
         "revision" : "a18ee16b8039866fd919bdb4e8e906882d4ecc75",
         "version" : "2.13.0"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
+        "version" : "602.0.0"
       }
     },
     {

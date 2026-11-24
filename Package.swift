@@ -8,7 +8,8 @@ let package = Package(
         .library(name: "DBKit", targets: ["DBKit"])
     ],
     dependencies: [
-        .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.33.0")
+        .package(url: "https://github.com/vapor/postgres-nio.git", from: "1.33.0"),
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0"),
     ],
     targets: [
         .target(
@@ -16,6 +17,18 @@ let package = Package(
             dependencies: [
                 .product(name: "PostgresNIO", package: "postgres-nio")
             ]
-        )
+        ),
+        .testTarget(
+            name: "DBKitTests",
+            dependencies: ["DBKit"]
+        ),
+        .testTarget(
+            name: "DBKitMacrosTests",
+            dependencies: [
+                "DBKitMacros",
+                .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax"),
+            ]
+        ),
     ]
 )

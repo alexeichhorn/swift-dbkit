@@ -61,3 +61,7 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 
 | Rust test | Reason |
 | --- | --- |
+| `ui/fail_appended_model_type.rs` | `@Model` adds members and extensions only, so it can't declare a type under another name, such as `UserModel` for `User`. |
+| `ui/fail_derive_model_with_dbkit_field_attr.rs` | Swift has no derive macros; `@Model` is the only way to declare a model. |
+| `ui/fail_model_suffix_double_model_type.rs` | `@Model` can't declare a type under another name, such as `UserModelModel` for `UserModel`. |
+| `ui/fail_nullable_model_field_type_alias.rs` | rust-dbkit's macro tells nullable fields by their syntax and rejects an alias of `Option`. Swift's type checker resolves `typealias OptionalText = String?`, so `@Model` accepts the alias as a nullable column. |
