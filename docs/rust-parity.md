@@ -21,6 +21,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - Bitwise operators with one required and one nullable operand, a nullable shift count, and a value on the left
 - A timestamp plus or minus a nullable interval, giving a nullable timestamp
 - Comparisons on nullable columns typed as `Bool?`
+- Row-value tuples take each column's own type, so integer literals, optional values and `nil` for nullable columns, and `SQL.row(…).in(…)` is `Bool?` when a column is nullable
 - Parentheses around a comparison used inside another comparison
 - `exists(subquery)` as a `Bool` expression
 - Streaming of projections, grouping and aggregates
@@ -55,6 +56,8 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - **Updating or deleting a new active model.** `update(on:)` and `delete(on:)` need a loaded row; calling them on `ActiveModel()` is a programmer error and traps. rust-dbkit returns an error when a key column is unset.
 - **Arithmetic result types.** They follow PostgreSQL. Arithmetic on two `smallint`s stays `Int16`, where rust-dbkit types it `Int32`, and `+`, `-` and `*` accept mixed numeric types, which rust-dbkit accepts only in `/`.
 - **Interval units.** `SQL.interval(days:|hours:|minutes:)` takes any numeric type, such as `SQL.interval(hours: 1.5)`, where rust-dbkit takes only 32-bit integers. rust-dbkit renders PostgreSQL's `MAKE_INTERVAL`, which takes integers for these units; this port renders `(x * INTERVAL '1 hour')`, which PostgreSQL defines for any number.
+- **A condition's predicate.** `Condition.all` and `.any` take `Bool` and `Bool?` predicates, and `predicate` is always `Expr<Bool?>`. rust-dbkit keeps it `bool` until a nullable predicate is added, but Swift can't change a variable's type when `add(_:)` mutates it.
+- **Repeated values.** Every occurrence of a value gets its own bind. rust-dbkit binds an identical value once and repeats its placeholder.
 - **Migrations.** rust-dbkit delegates to sqlx and its `_sqlx_migrations` table. `db.migrate(_:)` reads `.sql` files at runtime and records them in `_dbkit_migrations`.
 
 ## API Changes From The Kit
@@ -95,3 +98,4 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `bitwise_integration.rs::custom_integer_backed_type_filters_and_roundtrips` | Custom integer-backed types in bitwise expressions are left out. |
 | `ui/pass_bitwise_custom_integer_types.rs` | Custom integer-backed types in bitwise expressions are left out. |
 | `ui/fail_interval_float_hours.rs` | `SQL.interval(hours:)` takes fractions, see "Interval units" under "Different On Purpose". |
+| `sql_compiler.rs::condition_preserves_required_predicate_type` | A condition's predicate is always `Bool?`, see "A condition's predicate" under "Different On Purpose". |

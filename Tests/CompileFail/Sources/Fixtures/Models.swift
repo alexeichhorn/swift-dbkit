@@ -28,3 +28,15 @@ class RunPayloadModel {
     var source: String
     var version: Int64
 }
+
+/// rust-dbkit's `LookupItem` of the `*row_value_in*` fixtures.
+@Model(table: "lookup_items")
+class LookupItemModel {
+    @Key var id: Int64
+    var namespace: String
+    var optionalNamespace: String?
+    var externalKey: String
+    var optionalExternalKey: String?
+    var locale: String
+    var optionalLocale: String?
+}

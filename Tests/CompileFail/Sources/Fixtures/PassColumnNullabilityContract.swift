@@ -184,7 +184,27 @@ private func logicIsNullableWhenAnOperandIs() {
     _ = NullabilityRowModel.update().set(NullabilityRowModel.requiredText, to: "updated").filter(nullable)
     _ = NullabilityRowModel.delete().filter(nullable)
 
-    // Waits for slice 13: `Condition` is `Expr<Bool?>` once a nullable predicate is added.
+    // A condition's predicate is `Expr<Bool?>`, even when it holds only required predicates. rust-dbkit keeps it
+    // `bool` until a nullable one is added; Swift can't change a variable's type when `add` mutates it.
+    var requiredOnly = Condition.all
+    requiredOnly.add(NullabilityRowModel.id > 0)
+    requiredOnly.add(NullabilityRowModel.nullableText.isNotNull)
+    let _: Expr<Bool?>? = requiredOnly.predicate
+    var nullableThenRequired = Condition.all
+    nullableThenRequired.add(nullable)
+    nullableThenRequired.add(NullabilityRowModel.id > 0)
+    let _: Expr<Bool?>? = nullableThenRequired.predicate
+    var requiredThenNullable = Condition.any
+    requiredThenNullable.add(NullabilityRowModel.id < 0)
+    requiredThenNullable.add(nullable)
+    let _: Expr<Bool?>? = requiredThenNullable.predicate
+    if let predicate = requiredThenNullable.predicate {
+        let _: Expr<Bool?> = predicate && NullabilityRowModel.id > 0
+    }
+    var nullComparison = Condition.all
+    nullComparison.add(NullabilityRowModel.nullableText == nil)
+    _ = NullabilityRowModel.query().filter(requiredOnly).filter(nullComparison)
+
     // Waits for slice 14: `having(nullable)` and `SQL.count(NullabilityRowModel.id).filter(nullable)`.
     // Waits for slice 18: `join(_:on: nullable)` and `leftJoin(_:on: nullable)`.
 }

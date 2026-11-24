@@ -93,6 +93,20 @@ class LeaseModel {
         #expect(empty.binds.isEmpty)
     }
 
+    @Test func correlatedExistsAndDynamicConditions() {
+        var condition = Condition.any
+        condition.add(UserModel.region == "us")
+        condition.add(UserModel.region.isNull && UserModel.name == "Sam")
+        // Waits for slice 21: the empty `Condition.all` filters a `ProjectModel` query with a correlated `whereExists`.
+        #expect(UserModel.query().filter(Condition.all).render().sql == #"SELECT "users".* FROM "users""#)
+        let rendered = UserModel.query().filter(condition).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users".* FROM "users" WHERE ("users"."region" = $1 OR ("users"."region" IS NULL AND "users"."name" = $2))"#
+        )
+        #expect(rendered.binds.map(\.description) == ["us", "Sam"])
+    }
+
     /// `TodoModel` stands in for the kit's `TaskModel`, whose enum columns arrive in slice 26.
     @Test func rowValuesEnumsAndColumnComparisons() {
         let rendered = TodoModel.query()
@@ -100,8 +114,8 @@ class LeaseModel {
             .render()
         #expect(rendered.sql == #"SELECT "todos".* FROM "todos" WHERE "todos"."note" IS DISTINCT FROM "todos"."title""#)
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 13: `SQL.row(TaskModel.state, TaskModel.title).in([(.pendingReview, "alpha"), (.completed, "beta")])`.
-        // Waits for slice 26: `TaskModel.state.in([.inProgress])` and `TaskModel.previousState.isDistinct(from: TaskModel.state)`.
+        // Waits for slice 26: `SQL.row(TaskModel.state, TaskModel.title).in([(.pendingReview, "alpha"), (.completed, "beta")])`,
+        // `TaskModel.state.in([.inProgress])` and `TaskModel.previousState.isDistinct(from: TaskModel.state)`.
 
         let arithmetic = TaskModel.query().filter(TaskModel.attempts + 1 < TaskModel.attempts * 2).render()
         #expect(arithmetic.sql == #"SELECT "tasks".* FROM "tasks" WHERE ("tasks"."attempts" + $1) < ("tasks"."attempts" * $2)"#)
@@ -236,6 +250,43 @@ class LeaseModel {
         #expect(update.binds.map(\.description) == ["1", "42"])
         // Waits for slice 26: the same update also setting the enum `state` to `.completed` and `previousState` to `nil`.
         // Waits for slice 21: `TaskModel.delete().whereExists(…)` with a correlated `ProjectModel` subquery.
+    }
+
+    /// A condition nests in another through its predicate, which updates and deletes filter by once unwrapped. A row
+    /// value matches composite keys and takes `nil` for a nullable column.
+    @Test func nestedConditionsAndRowValuesOnKeys() throws {
+        var condition = Condition.all
+        #expect(condition.isEmpty)
+        #expect(condition.predicate == nil)
+
+        var owners = Condition.any
+        owners.add(TodoModel.userID == 1)
+        owners.add(TodoModel.userID == 2)
+        condition.add(TodoModel.note == "today")
+        condition.add(try #require(owners.predicate))
+        #expect(!condition.isEmpty)
+        let predicate: Expr<Bool?> = try #require(condition.predicate)
+        let update = TodoModel.update().set(TodoModel.isComplete, to: true).filter(predicate).render()
+        #expect(
+            update.sql
+                == #"UPDATE "todos" SET "is_complete" = $1 WHERE ("todos"."note" = $2 AND ("todos"."user_id" = $3 OR "todos"."user_id" = $4))"#
+        )
+        #expect(update.binds.map(\.description) == ["true", "today", "1", "2"])
+        let delete = TodoModel.delete().filter(predicate).render()
+        #expect(delete.sql == #"DELETE FROM "todos" WHERE ("todos"."note" = $1 AND ("todos"."user_id" = $2 OR "todos"."user_id" = $3))"#)
+        #expect(delete.binds.map(\.description) == ["today", "1", "2"])
+
+        let lines: Expr<Bool> = SQL.row(OrderLineModel.orderID, OrderLineModel.lineID).in([(7, 8), (7, 9)])
+        let deletedLines = OrderLineModel.delete().filter(lines).render()
+        #expect(
+            deletedLines.sql
+                == #"DELETE FROM "order_lines" WHERE ("order_lines"."order_id", "order_lines"."line_id") IN (($1, $2), ($3, $4))"#)
+        #expect(deletedLines.binds.map(\.description) == ["7", "8", "7", "9"])
+
+        let notes: Expr<Bool?> = SQL.row(TodoModel.id, TodoModel.note).in([(1, "today"), (2, nil)])
+        let todos = TodoModel.query().filter(notes).render()
+        #expect(todos.sql == #"SELECT "todos".* FROM "todos" WHERE ("todos"."id", "todos"."note") IN (($1, $2), ($3, NULL))"#)
+        #expect(todos.binds.map(\.description) == ["1", "today", "2"])
     }
 
     @Test func conflictClausesWithoutTargetAndWithBothColumnListsInConstants() {

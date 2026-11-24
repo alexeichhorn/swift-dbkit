@@ -567,6 +567,41 @@ import Testing
             #expect(nullRows.allSatisfy { $0.note == nil })
         }
     }
+
+    /// The row `(null.id, NULL)` compares as NULL, never as a match.
+    @Test func nullableRowValueInFollowsPostgresThreeValuedLogic() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let null = try await seedNullableRow(on: tx, note: nil)
+            let alpha = try await seedNullableRow(on: tx, note: "alpha")
+            _ = try await seedNullableRow(on: tx, note: "beta")
+
+            let alphaNote: String? = "alpha"
+            let listed: Expr<Bool?> = SQL.row(NullableRowModel.id, NullableRowModel.note).in([(alpha.id, alphaNote), (null.id, nil)])
+            // Waits for slice 14: `listed` as the projection `listed`, NULL for the NULL row, true for alpha, false for beta.
+
+            let filtered = try await NullableRowModel.query().filter(listed).all(on: tx)
+            #expect(filtered.map(\.id) == [alpha.id])
+        }
+    }
+
+    @Test func conditionsPreservePostgresThreeValuedLogic() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            for note in [nil, "alpha", "middle", "zulu"] {
+                _ = try await seedNullableRow(on: tx, note: note)
+            }
+            // Waits for slice 14: the projections `single_nullable`, `all_with_true`, `all_with_false`, `any_with_false`,
+            // `any_with_true` and `required_only`, each a condition's predicate, NULL where PostgreSQL's logic gives NULL.
+
+            var condition = Condition.all
+            condition.add(NullableRowModel.note == "middle")
+            condition.add(NullableRowModel.id > 0)
+            let matching = try await NullableRowModel.query().filter(try #require(condition.predicate)).all(on: tx)
+            #expect(matching.count == 1)
+            #expect(matching.first?.note == "middle")
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.

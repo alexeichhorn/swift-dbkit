@@ -375,9 +375,8 @@ class ValueRowModel {
 
             // Waits for slice 14: the `sales` totals per region, as `Decodable` rows, as a `@Projection` and as a tuple.
             // Waits for slice 16: the string functions on `sales`.
-            // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update
-            // and `deliveries`.
-            // Waits for slice 13: `SQL.row(TaskModel.state, TaskModel.title).in(…)`.
+            // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update,
+            // `SQL.row(TaskModel.state, TaskModel.title).in(…)` over the enum column, and `deliveries`.
         }
     }
 

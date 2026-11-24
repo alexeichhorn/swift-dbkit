@@ -193,4 +193,46 @@ class CompilerWindowRowModel {
         )
         #expect(sameWidthRendered.binds.map(\.description) == ["3"])
     }
+
+    @Test func conditionAnyEmptyReturnsNone() {
+        let predicate: Expr<Bool?>? = Condition.any.predicate
+        #expect(predicate == nil)
+    }
+
+    @Test func conditionAllEmptyReturnsNone() {
+        let predicate: Expr<Bool?>? = Condition.all.predicate
+        #expect(predicate == nil)
+    }
+
+    @Test func compilesConditionAnyOr() throws {
+        var condition = Condition.any
+        condition.add(CompilerUserModel.email.like("%example%"))
+        condition.add(CompilerUserModel.id > 10)
+        let predicate: Expr<Bool?> = try #require(condition.predicate)
+
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE ("users"."email" LIKE $1 OR "users"."id" > $2)"#)
+        #expect(rendered.binds.map(\.description) == ["%example%", "10"])
+    }
+
+    @Test func compilesConditionAllAnd() throws {
+        var condition = Condition.all
+        condition.add(CompilerUserModel.id > 10)
+        condition.add(CompilerUserModel.email.like("%example%"))
+        let predicate: Expr<Bool?> = try #require(condition.predicate)
+
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE ("users"."id" > $1 AND "users"."email" LIKE $2)"#)
+        #expect(rendered.binds.map(\.description) == ["10", "%example%"])
+    }
+
+    @Test func conditionPreservesSingleNullablePredicateType() throws {
+        var condition = Condition.all
+        condition.add(CompilerUserModel.email == "a@b.com")
+        let predicate: Expr<Bool?> = try #require(condition.predicate)
+
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."email" = $1"#)
+        #expect(rendered.binds.map(\.description) == ["a@b.com"])
+    }
 }

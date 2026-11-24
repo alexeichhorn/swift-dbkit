@@ -110,6 +110,17 @@ class IntervalRowModel {
     var leaseWindow: Interval
 }
 
+/// rust-dbkit's `revision_snapshots` of `row_value_in_sql.rs` and `integration_row_value_in.rs`. `Date` stands in for
+/// its `timestamp` column.
+@Model(table: "revision_snapshots")
+class RevisionSnapshotModel {
+    @Key @AutoIncrement var id: Int64
+    var seriesID: Int64
+    var revision: Int32
+    var capturedAt: Date
+    var note: String
+}
+
 /// rust-dbkit's `events`. `Date` stands in for its `timestamp` and `date` columns; Swift has no type for its `time`
 /// column `starts_at_time`.
 @Model(table: "events")
