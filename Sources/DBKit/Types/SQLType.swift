@@ -2,8 +2,11 @@ import Foundation
 import PostgresNIO
 
 /// A Swift type stored in one database column. `Optional` marks a nullable column.
+///
+/// The `As…` associated types carry nullability into results: `String.AsBool` is `Bool`, `String?.AsBool` is `Bool?`.
 public protocol SQLType: Sendable {
     associatedtype NonNull: SQLValue
+    associatedtype AsBool
 
     /// The value as a bind parameter, or `NULL`.
     var sqlNode: SQLNode { get }
@@ -12,7 +15,8 @@ public protocol SQLType: Sendable {
 }
 
 /// A non-null value that can be bound as a query parameter and decoded from a result column.
-public protocol SQLValue: SQLType, SQLArgument, PostgresEncodable, PostgresDecodable where NonNull == Self, Value == Self {
+public protocol SQLValue: SQLType, SQLArgument, PostgresEncodable, PostgresDecodable
+where NonNull == Self, Value == Self, AsBool == Bool {
     /// PostgreSQL type name, used for `CAST` and typed placeholders.
     static var sqlTypeName: String { get }
 }
@@ -27,6 +31,7 @@ extension SQLValue {
 
 extension Optional: SQLType where Wrapped: SQLValue {
     public typealias NonNull = Wrapped
+    public typealias AsBool = Bool?
 
     public var sqlNode: SQLNode { map(\.sqlNode) ?? .null }
 

@@ -7,6 +7,16 @@ public indirect enum SQLNode: Sendable {
     case raw(String)
     case sequence([SQLNode])
 
+    static func function(_ name: String, _ arguments: [SQLNode]) -> SQLNode {
+        var parts: [SQLNode] = [.raw("\(name)(")]
+        for (index, argument) in arguments.enumerated() {
+            if index > 0 { parts.append(.raw(", ")) }
+            parts.append(argument)
+        }
+        parts.append(.raw(")"))
+        return .sequence(parts)
+    }
+
     static func infix(_ lhs: SQLNode, _ op: String, _ rhs: SQLNode, parenthesized: Bool = true) -> SQLNode {
         parenthesized ? .sequence([.raw("("), lhs, .raw(" \(op) "), rhs, .raw(")")]) : .sequence([lhs, .raw(" \(op) "), rhs])
     }
