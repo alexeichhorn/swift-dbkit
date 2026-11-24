@@ -91,6 +91,19 @@ extension SQLExpression where Value.NonNull == String {
     public func ilike(_ pattern: some SQLArgument<String>) -> Expr<Value.AsBool> {
         Expr(.infix(sqlNode, "ILIKE", pattern.sqlNode, parenthesized: false))
     }
+
+    public func lowercased() -> Expr<Value> { SQL.lower(self) }
+    public func uppercased() -> Expr<Value> { SQL.upper(self) }
+    /// Removes spaces from both ends.
+    public func trimmed() -> Expr<Value> { SQL.trim(self) }
+    /// Exact, case-sensitive prefix test; `%` and `_` are literal.
+    public func hasPrefix<P: SQLArgument>(_ prefix: P) -> Expr<Value.AsBool> where P.Value.NonNull == String, P.Value.AsBool: SQLValue {
+        SQL.startsWith(self, prefix)
+    }
+    /// A nullable prefix makes the result nullable.
+    public func hasPrefix<P: SQLArgument>(_ prefix: P) -> Expr<Bool?> where P.Value: ExpressibleByNilLiteral, P.Value.NonNull == String {
+        SQL.startsWith(self, prefix)
+    }
 }
 
 /// Nullable text also matches an optional pattern, as `LIKE NULL` when it is `nil`.

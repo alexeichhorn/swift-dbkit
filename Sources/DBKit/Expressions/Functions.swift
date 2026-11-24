@@ -1,5 +1,110 @@
+import Foundation
+
 /// Typed SQL functions. Results keep the nullability of their inputs where PostgreSQL propagates NULL.
 public enum SQL {
+    /// `NOW()`: the transaction's start time.
+    public static func now() -> Expr<Date> { Expr(.raw("NOW()")) }
+
+    // `COALESCE`, `LEAST` and `GREATEST` take arguments of one type and are nullable only when both arguments are. A
+    // plain value takes the other argument's type, so a literal fits the column it is paired with.
+
+    /// `COALESCE(value, fallback)`, same as `value ?? fallback`.
+    public static func coalesce<L: SQLExpression, W: SQLValue>(_ value: L, _ fallback: W) -> Expr<W> where L.Value == W? {
+        value ?? fallback
+    }
+
+    public static func coalesce<L: SQLExpression, R: SQLExpression, W: SQLValue>(_ value: L, _ fallback: R) -> Expr<R.Value>
+    where L.Value == W?, R.Value.NonNull == W {
+        Expr(.function("COALESCE", [value.sqlNode, fallback.sqlNode]))
+    }
+
+    /// A required first argument makes the result required.
+    public static func coalesce<L: SQLExpression, R: SQLExpression>(_ value: L, _ fallback: R) -> Expr<L.Value>
+    where L.Value == R.Value.NonNull {
+        Expr(.function("COALESCE", [value.sqlNode, fallback.sqlNode]))
+    }
+
+    /// `DATE_TRUNC('unit', timestamp)`.
+    public static func dateTrunc<E: SQLExpression>(_ unit: DateTruncUnit, _ timestamp: E) -> Expr<E.Value> where E.Value.NonNull == Date {
+        Expr(.function("DATE_TRUNC", [.raw("'\(unit.rawValue)'"), timestamp.sqlNode]))
+    }
+
+    /// `LEAST(…)`. PostgreSQL ignores NULL arguments, so a non-null argument makes the result non-null.
+    public static func least<L: SQLExpression>(_ lhs: L, _ rhs: L.Value.NonNull) -> Expr<L.Value.NonNull> {
+        Expr(.function("LEAST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func least<R: SQLExpression>(_ lhs: R.Value.NonNull, _ rhs: R) -> Expr<R.Value.NonNull> {
+        Expr(.function("LEAST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func least<L: SQLExpression, R: SQLExpression>(_ lhs: L, _ rhs: R) -> Expr<L.Value> where L.Value == R.Value {
+        Expr(.function("LEAST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func least<L: SQLExpression, R: SQLExpression, V: SQLValue>(_ lhs: L, _ rhs: R) -> Expr<V>
+    where L.Value == V, R.Value == V? {
+        Expr(.function("LEAST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func least<L: SQLExpression, R: SQLExpression, V: SQLValue>(_ lhs: L, _ rhs: R) -> Expr<V>
+    where L.Value == V?, R.Value == V {
+        Expr(.function("LEAST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    /// `GREATEST(…)`. PostgreSQL ignores NULL arguments, so a non-null argument makes the result non-null.
+    public static func greatest<L: SQLExpression>(_ lhs: L, _ rhs: L.Value.NonNull) -> Expr<L.Value.NonNull> {
+        Expr(.function("GREATEST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func greatest<R: SQLExpression>(_ lhs: R.Value.NonNull, _ rhs: R) -> Expr<R.Value.NonNull> {
+        Expr(.function("GREATEST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func greatest<L: SQLExpression, R: SQLExpression>(_ lhs: L, _ rhs: R) -> Expr<L.Value> where L.Value == R.Value {
+        Expr(.function("GREATEST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func greatest<L: SQLExpression, R: SQLExpression, V: SQLValue>(_ lhs: L, _ rhs: R) -> Expr<V>
+    where L.Value == V, R.Value == V? {
+        Expr(.function("GREATEST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    public static func greatest<L: SQLExpression, R: SQLExpression, V: SQLValue>(_ lhs: L, _ rhs: R) -> Expr<V>
+    where L.Value == V?, R.Value == V {
+        Expr(.function("GREATEST", [lhs.sqlNode, rhs.sqlNode]))
+    }
+
+    // `POWER(base, exponent)` is `double precision` for any mix of the integers, `Float` and `Double`, and `numeric` for
+    // two `Decimal`s; `Decimal` takes no other type, as in arithmetic. Either nullable argument makes it nullable. The
+    // overloads split on the exponent's nullability, as comparisons do.
+
+    /// `POWER(base, exponent)` in double precision.
+    public static func power<B: SQLArgument, E: SQLArgument>(_ base: B, _ exponent: E) -> Expr<B.Value.AsDouble>
+    where B.Value: SQLMixedNumeric, E.Value: SQLMixedNumeric, E.Value == E.Value.NonNull {
+        Expr(.function("POWER", [base.sqlNode, exponent.sqlNode]))
+    }
+
+    public static func power<B: SQLArgument, E: SQLArgument>(_ base: B, _ exponent: E) -> Expr<Double?>
+    where B.Value: SQLMixedNumeric, E.Value: SQLMixedNumeric & ExpressibleByNilLiteral {
+        Expr(.function("POWER", [base.sqlNode, exponent.sqlNode]))
+    }
+
+    /// `POWER(base, exponent)` in `numeric`. A literal exponent is a `Decimal`.
+    public static func power<B: SQLExpression>(_ base: B, _ exponent: Decimal) -> Expr<B.Value> where B.Value.NonNull == Decimal {
+        Expr(.function("POWER", [base.sqlNode, exponent.sqlNode]))
+    }
+
+    public static func power<B: SQLArgument, E: SQLExpression>(_ base: B, _ exponent: E) -> Expr<B.Value>
+    where B.Value.NonNull == Decimal, E.Value == Decimal {
+        Expr(.function("POWER", [base.sqlNode, exponent.sqlNode]))
+    }
+
+    public static func power<B: SQLArgument, E: SQLExpression>(_ base: B, _ exponent: E) -> Expr<Decimal?>
+    where B.Value.NonNull == Decimal, E.Value == Decimal? {
+        Expr(.function("POWER", [base.sqlNode, exponent.sqlNode]))
+    }
+
     // MARK: Row values
     //
     // One overload per arity, from two to six columns, rather than a parameter pack: when `SQL.row(…).in(…)` is one
@@ -77,4 +182,8 @@ public enum SQL {
     private static func scaledInterval<E: SQLArgument>(_ amount: E, unit: String) -> Expr<E.Value.AsInterval> {
         Expr(.sequence([.raw("("), amount.sqlNode, .raw(" * INTERVAL '\(unit)')")]))
     }
+}
+
+public enum DateTruncUnit: String, Sendable {
+    case microseconds, milliseconds, second, minute, hour, day, week, month, quarter, year, decade, century, millennium
 }
