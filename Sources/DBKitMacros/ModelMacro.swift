@@ -341,16 +341,21 @@ private struct Generator {
 
     func insertType() -> String {
         let fields = model.fields.filter { !$0.isAutoIncrement }
+        let values = fields.map { field in
+            field.isDatabaseDefault
+                ? "\(field.name).map { DBKit.ColumnValue(\"\(field.column)\", $0) } ?? .databaseDefault(\"\(field.column)\")"
+                : "DBKit.ColumnValue(\"\(field.column)\", \(field.name))"
+        }
         return """
             \(access)struct Insert: DBKit.ModelInsert {
-                \(fields.map { "\(access)var \($0.name): \($0.type)" }.joined(separator: "\n"))
+                \(fields.map { "\(access)var \($0.name): \(insertType($0))" }.joined(separator: "\n"))
 
-                \(access)init(\(fields.map { parameter($0) }.joined(separator: ", "))) {
+                \(access)init(\(fields.map { parameter($0, inInsert: true) }.joined(separator: ", "))) {
                     \(fields.map { "self.\($0.name) = \($0.name)" }.joined(separator: "\n"))
                 }
 
                 \(access)var columnValues: [DBKit.ColumnValue] {
-                    [\(fields.map { "DBKit.ColumnValue(\"\($0.column)\", \($0.name))" }.joined(separator: ", "))]
+                    [\(values.joined(separator: ", "))]
                 }
             }
             """
@@ -379,6 +384,7 @@ private struct Generator {
                 \(access)static var schema: DBKit.Schema {
                     DBKit.Schema(
                         table: "\(model.table)",
+                        tableSchema: \(model.schema.map { "\"\($0)\"" } ?? "nil"),
                         columns: [\(model.fields.map { "\"\($0.column)\"" }.joined(separator: ", "))],
                         primaryKey: [\(model.keys.map { "\"\($0.column)\"" }.joined(separator: ", "))]
                     )
@@ -410,7 +416,12 @@ private struct Generator {
         "_\(relation.capitalized)Slot<\(relation.loadedType(relation.target))>"
     }
 
-    private func parameter(_ field: ModelDescription.Field) -> String {
-        "\(field.name): \(field.type)" + (field.parameterDefault.map { " = \($0)" } ?? "")
+    private func insertType(_ field: ModelDescription.Field) -> String {
+        field.isDatabaseDefault ? "\(field.type)?" : field.type
+    }
+
+    private func parameter(_ field: ModelDescription.Field, inInsert: Bool = false) -> String {
+        if inInsert, field.isDatabaseDefault { return "\(field.name): \(field.type)? = nil" }
+        return "\(field.name): \(field.type)" + (field.parameterDefault.map { " = \($0)" } ?? "")
     }
 }

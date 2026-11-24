@@ -1,8 +1,9 @@
 import Foundation
 import Logging
+import NIOCore
 import PostgresNIO
 
-/// Something that runs queries: a ``Database`` or a ``Transaction``.
+/// Something that runs queries: a ``Database``, a ``Transaction`` or a ``DedicatedConnection``.
 public protocol DatabaseExecutor: Sendable {
     var logger: Logger { get }
 
@@ -19,6 +20,11 @@ extension DatabaseExecutor {
             models.append(try M.decodeBase(from: RowReader(row: row.makeRandomAccess(), prefix: "")))
         }
         return models
+    }
+
+    /// Sends a notification to the listeners of `channel` (`pg_notify`). In a transaction it is delivered on commit.
+    public func notify(_ channel: String, payload: String = "") async throws {
+        _ = try await query("SELECT pg_notify(\(channel), \(payload))").collect()
     }
 
     /// Runs the query and turns each row into a value as it arrives. A raw row keeps the network buffer it arrived in

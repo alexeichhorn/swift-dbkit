@@ -1,3 +1,4 @@
+import NIOCore
 import PostgresNIO
 
 /// A PostgreSQL `interval`, stored like PostgreSQL does: months, days and microseconds are separate

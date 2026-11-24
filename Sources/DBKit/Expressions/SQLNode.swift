@@ -58,10 +58,24 @@ public indirect enum SQLNode: Sendable {
 /// A model column, optionally reached through a chain of `BelongsTo` relations (a relation path).
 public struct ColumnReference: Sendable {
     /// The qualifier: the model's table, or the alias of a ``ModelAlias``.
-    let table: String
+    let table: TableName
     let name: String
     /// Relations walked from the query's model to the column's table; empty for direct columns.
     let path: [Relation]
+}
+
+/// A table as a statement names it: `"app"."users"` for a table in a schema, `"users"` without one. An alias is a name
+/// without a schema.
+struct TableName: Hashable, Sendable {
+    let schema: String?
+    /// The bare name. PostgreSQL tells the tables of a statement apart by it, also across schemas, and `FOR UPDATE OF`
+    /// takes only it.
+    let name: String
+
+    static func alias(_ name: String) -> TableName { TableName(schema: nil, name: name) }
+
+    /// The quoted name, qualified by its schema.
+    var sql: String { (schema.map { quoted($0) + "." } ?? "") + quoted(name) }
 }
 
 /// A bind parameter value.

@@ -1,6 +1,6 @@
 /// The untyped parts of a `SELECT`, shared by model queries, projections and subqueries.
 public struct SelectStatement: Sendable {
-    var table: String
+    var table: TableName
     /// The name the table goes by in this `SELECT` (`FROM "table" AS "alias"`), set by ``ModelAlias/query()``.
     var alias: String?
     /// Projected expressions; `nil` selects `"table".*`.
@@ -17,7 +17,7 @@ public struct SelectStatement: Sendable {
     var offset: Int?
     var lock: RowLock?
 
-    init(table: String) {
+    init(table: TableName) {
         self.table = table
     }
 }
@@ -34,7 +34,7 @@ enum JoinKind: String, Sendable {
 
 enum JoinClause: Sendable {
     case relation(Relation, JoinKind)
-    case table(String, on: SQLNode, JoinKind)
+    case table(TableName, on: SQLNode, JoinKind)
 }
 
 /// Waiting behavior of `SELECT … FOR UPDATE`.
@@ -70,14 +70,14 @@ final class SQLRenderer {
     private(set) var binds: [Bind] = []
     /// Each rendered column's qualifier with the scope that provides it, so a custom join can tell which joins its
     /// condition needs.
-    private(set) var references: [(scope: JoinScope, qualifier: String)] = []
+    private(set) var references: [(scope: JoinScope, qualifier: TableName)] = []
 
     func render(_ node: SQLNode, in scope: JoinScope) -> String {
         switch node {
         case .column(let column):
             let (qualifier, provider) = scope.resolve(column)
             if let provider { references.append((provider, qualifier)) }
-            return "\(quoted(qualifier)).\(quoted(column.name))"
+            return "\(qualifier.sql).\(quoted(column.name))"
         case .bind(let bind):
             binds.append(bind)
             return "$\(binds.count)\(bind.placeholderCast ?? "")"
@@ -107,13 +107,13 @@ final class SQLRenderer {
         } else {
             switch modelColumns {
             case .loaded:
-                columns = ["\(quoted(base)).*"] + statement.extraItems.map { renderItem($0, in: scope) }
+                columns = ["\(base.sql).*"] + statement.extraItems.map { renderItem($0, in: scope) }
                 columns += eagerColumns(eagerJoins, path: [], prefix: "", in: scope)
             case .distinctKeysWhenJoined(let keys) where !plannedJoins.isEmpty:
-                columns = keys.map { "\(quoted(base)).\(quoted($0))" }
+                columns = keys.map { "\(base.sql).\(quoted($0))" }
                 distinct = true
             case .table, .distinctKeysWhenJoined:
-                columns = ["\(quoted(base)).*"]
+                columns = ["\(base.sql).*"]
             }
         }
 
@@ -137,8 +137,8 @@ final class SQLRenderer {
         if let offset = statement.offset { clauses.append("OFFSET \(offset)") }
         if let lock = statement.lock {
             // Scope the lock to the base table so outer-joined rows aren't locked (PostgreSQL rejects locking
-            // the nullable side of an outer join).
-            var clause = joins.isEmpty ? "FOR UPDATE" : "FOR UPDATE OF \(quoted(base))"
+            // the nullable side of an outer join). PostgreSQL rejects a schema-qualified name there.
+            var clause = joins.isEmpty ? "FOR UPDATE" : "FOR UPDATE OF \(quoted(base.name))"
             switch lock {
             case .wait: break
             case .skipLocked: clause += " SKIP LOCKED"
@@ -147,7 +147,7 @@ final class SQLRenderer {
             clauses.append(clause)
         }
 
-        let from = statement.alias.map { "\(quoted(statement.table)) AS \(quoted($0))" } ?? quoted(statement.table)
+        let from = statement.alias.map { "\(statement.table.sql) AS \(quoted($0))" } ?? statement.table.sql
         let head = "SELECT \(distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(from)"
         return ([head] + joins + clauses).joined(separator: " ")
     }
@@ -175,7 +175,7 @@ final class SQLRenderer {
             relation.parents = path
             let alias = scope.relationJoin(relation.path.map(\.name)).alias
             let childPrefix = prefix + relation.name + "."
-            let columns = relation.target.schema.columns.map { "\(quoted(alias)).\(quoted($0)) AS \(quoted(childPrefix + $0))" }
+            let columns = relation.target.schema.columns.map { "\(alias.sql).\(quoted($0)) AS \(quoted(childPrefix + $0))" }
             return columns + eagerColumns(join.nested, path: relation.path, prefix: childPrefix, in: scope)
         }
     }
@@ -183,29 +183,29 @@ final class SQLRenderer {
     private func renderJoin(_ join: PlannedJoin, in scope: JoinScope) -> String {
         switch join {
         case .table(let table, let condition, let kind):
-            return "\(kind.rawValue) \(quoted(table)) ON \(render(condition, in: scope))"
+            return "\(kind.rawValue) \(table.sql) ON \(render(condition, in: scope))"
         case .relation(let names):
             let join = scope.relationJoin(names)
             let relation = join.relation
             let kind = join.kind.rawValue
-            let target = tableReference(relation.target.schema.table, join.alias)
+            let target = tableReference(relation.target.schema.tableName, join.alias)
             switch relation.kind {
             case .belongsTo, .hasMany:
-                return "\(kind) \(target) ON \(quoted(join.alias)).\(quoted(relation.targetColumn)) = "
-                    + "\(quoted(join.parent)).\(quoted(relation.sourceColumn))"
+                return "\(kind) \(target) ON \(join.alias.sql).\(quoted(relation.targetColumn)) = "
+                    + "\(join.parent.sql).\(quoted(relation.sourceColumn))"
             case .manyToMany(let through):
                 let throughAlias = join.throughAlias!
                 return
-                    "\(kind) \(tableReference(through.table, throughAlias)) ON \(quoted(throughAlias)).\(quoted(through.sourceColumn)) = "
-                    + "\(quoted(join.parent)).\(quoted(relation.sourceColumn)) "
-                    + "\(kind) \(target) ON \(quoted(join.alias)).\(quoted(relation.targetColumn)) = "
-                    + "\(quoted(throughAlias)).\(quoted(through.targetColumn))"
+                    "\(kind) \(tableReference(through.table, throughAlias)) ON \(throughAlias.sql).\(quoted(through.sourceColumn)) = "
+                    + "\(join.parent.sql).\(quoted(relation.sourceColumn)) "
+                    + "\(kind) \(target) ON \(join.alias.sql).\(quoted(relation.targetColumn)) = "
+                    + "\(throughAlias.sql).\(quoted(through.targetColumn))"
             }
         }
     }
 
-    private func tableReference(_ table: String, _ alias: String) -> String {
-        table == alias ? quoted(table) : "\(quoted(table)) AS \(quoted(alias))"
+    private func tableReference(_ table: TableName, _ alias: TableName) -> String {
+        table == alias ? table.sql : "\(table.sql) AS \(quoted(alias.name))"
     }
 }
 
@@ -214,51 +214,52 @@ enum PlannedJoin {
     /// The relation join of a path, identified by its relation names.
     case relation([String])
     /// A custom `join(_:on:)`.
-    case table(String, on: SQLNode, JoinKind)
+    case table(TableName, on: SQLNode, JoinKind)
 }
 
 /// The join of a relation path, shared by every use of the path in one statement.
 struct RelationJoin {
     /// The path's last relation.
     let relation: Relation
-    let alias: String
+    let alias: TableName
     /// The qualifier of the row the relation starts from: the base or the parent path's join.
-    let parent: String
+    let parent: TableName
     /// The join table's name, for a many-to-many relation.
-    let throughAlias: String?
+    let throughAlias: TableName?
     var kind: JoinKind
 }
 
 /// The joins of one statement and the names its columns resolve to. Every join is planned before any SQL is written,
 /// so a clause can use a join that a later clause adds, and a subquery sees every name of its enclosing statements.
 ///
-/// A relation join is named by its table, unless this statement or an enclosing one already uses that name: then by
-/// the base and the relation names (`"path_records.owner"`), so it never hides another table.
+/// A relation join is named by its table, unless this statement or an enclosing one already uses the table's bare name,
+/// also for a table of another schema: then by the base and the relation names (`"path_records.owner"`), so it never
+/// hides another table or makes its name ambiguous.
 final class JoinScope {
     /// The name the statement's own table goes by.
-    let base: String
+    let base: TableName
     /// The scope of the statement this one is a subquery of; a mutation's target table counts as one.
     let enclosing: JoinScope?
     /// Relation and custom joins in the order they were first needed: explicit joins in builder order, each custom
     /// join after the paths of its condition, then the paths of columns, filters, groups, `HAVING` and `ORDER BY`.
     private var joins: [PlannedJoin] = []
     private var relationJoins: [[String]: RelationJoin] = [:]
-    private var customTables: Set<String> = []
-    /// Every name this statement's `FROM` and joins use.
+    private var customTables: Set<TableName> = []
+    /// The bare name of every table and alias this statement's `FROM` and joins use.
     private var names: Set<String>
 
     /// A scope without joins, as for a mutation's target table.
-    init(base: String, enclosing: JoinScope? = nil) {
+    init(base: TableName, enclosing: JoinScope? = nil) {
         self.base = base
         self.enclosing = enclosing
-        self.names = [base]
+        self.names = [base.name]
     }
 
     convenience init(planning statement: SelectStatement, eagerJoins: [JoinedLoad], enclosing: JoinScope?) {
-        self.init(base: statement.alias ?? statement.table, enclosing: enclosing)
+        self.init(base: statement.alias.map(TableName.alias) ?? statement.table, enclosing: enclosing)
         for case .table(let table, _, _) in statement.joins {
             customTables.insert(table)
-            names.insert(table)
+            names.insert(table.name)
         }
         for join in statement.joins {
             switch join {
@@ -290,7 +291,7 @@ final class JoinScope {
     /// A path column refers to this statement's join of its path. A plain column of a table refers to the first of:
     /// this statement's own table or custom join of it; the nearest enclosing statement that binds the table (see
     /// `binding(of:)`); this statement's only relation join to it; the table itself.
-    func resolve(_ column: ColumnReference) -> (qualifier: String, provider: JoinScope?) {
+    func resolve(_ column: ColumnReference) -> (qualifier: TableName, provider: JoinScope?) {
         if !column.path.isEmpty {
             guard let join = relationJoins[column.path.map(\.name)] else {
                 preconditionFailure("relation paths are only supported in SELECT queries")
@@ -332,12 +333,12 @@ final class JoinScope {
 
     /// The name a subquery's plain column of `table` takes from this statement: its own table or custom join of it,
     /// else its only relation join to it. Two relation joins to the table bind nothing, leaving it to scopes further out.
-    private func binding(of table: String) -> String? {
+    private func binding(of table: TableName) -> TableName? {
         table == base || customTables.contains(table) ? table : onlyRelationAlias(to: table)
     }
 
-    private func onlyRelationAlias(to table: String) -> String? {
-        let matches = relationJoins.values.filter { $0.relation.target.schema.table == table }
+    private func onlyRelationAlias(to table: TableName) -> TableName? {
+        let matches = relationJoins.values.filter { $0.relation.target.schema.tableName == table }
         return matches.count == 1 ? matches[0].alias : nil
     }
 
@@ -379,7 +380,7 @@ final class JoinScope {
             if let explicitKind { relationJoins[names]!.kind = explicitKind }
             return
         }
-        let parent: String
+        let parent: TableName
         if path.count == 1 {
             parent = base
         } else {
@@ -387,18 +388,21 @@ final class JoinScope {
             parent = relationJoins[Array(names.dropLast())]!.alias
         }
         let relation = path[path.count - 1]
-        let alias = unusedName(relation.target.schema.table, fallback: base + "." + names.joined(separator: "."))
-        var throughAlias: String?
-        if case .manyToMany(let through) = relation.kind { throughAlias = unusedName(through.table, fallback: alias + ".through") }
+        let alias = unusedName(relation.target.schema.tableName, fallback: base.name + "." + names.joined(separator: "."))
+        var throughAlias: TableName?
+        if case .manyToMany(let through) = relation.kind {
+            throughAlias = unusedName(through.table, fallback: alias.name + ".through")
+        }
         relationJoins[names] = RelationJoin(
             relation: relation, alias: alias, parent: parent, throughAlias: throughAlias, kind: explicitKind ?? .left)
         joins.append(.relation(names))
     }
 
-    private func unusedName(_ name: String, fallback: String) -> String {
-        let alias = isUsed(name) ? fallback : name
-        names.insert(alias)
-        return alias
+    /// `table` itself, or the alias `fallback` when its bare name is in use.
+    private func unusedName(_ table: TableName, fallback: String) -> TableName {
+        let name = isUsed(table.name) ? TableName.alias(fallback) : table
+        names.insert(name.name)
+        return name
     }
 
     private func isUsed(_ name: String) -> Bool {

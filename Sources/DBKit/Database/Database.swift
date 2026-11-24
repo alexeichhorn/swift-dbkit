@@ -13,10 +13,12 @@ public final class Database: DatabaseExecutor, Service {
     /// The underlying client, for libraries that work with PostgresNIO directly (migrations, job queues).
     public let client: PostgresClient
     public let logger: Logger
+    private let url: DatabaseURL?
 
     public init(client: PostgresClient, logger: Logger = Logger(label: "dbkit")) {
         self.client = client
         self.logger = logger
+        self.url = nil
     }
 
     /// Creates a pool from a URL like `postgres://user:password@host:5432/database?sslmode=require`.
@@ -31,6 +33,7 @@ public final class Database: DatabaseExecutor, Service {
         configuration.options.maximumConnections = connections.upperBound
         self.client = PostgresClient(configuration: configuration, backgroundLogger: logger)
         self.logger = logger
+        self.url = url
     }
 
     /// Runs the connection pool until the task is cancelled or the service group shuts down.
@@ -62,6 +65,18 @@ public final class Database: DatabaseExecutor, Service {
             try await transaction.query("COMMIT")
             return result
         }
+    }
+
+    /// Opens a connection outside the pool, with the URL and TLS settings of the pool. It stays open until
+    /// ``DedicatedConnection/close()``.
+    public func dedicatedConnection() async throws -> DedicatedConnection {
+        guard let url else { throw DBKitError.missingDatabaseURL }
+        let connection = try await PostgresConnection.connect(
+            configuration: try PostgresConnection.Configuration(url),
+            id: dedicatedConnectionIDs.subtract(1, ordering: .relaxed).newValue,
+            logger: logger
+        )
+        return DedicatedConnection(connection: connection, logger: logger)
     }
 }
 
@@ -96,6 +111,9 @@ extension Database: CursorExecutor {
     }
 }
 
+/// Negative, so logs tell dedicated connections from pooled ones.
+private let dedicatedConnectionIDs = Atomic(0)
+
 /// An open transaction, passed to the closure of ``Database/transaction(isolation:_:)``.
 public struct Transaction: DatabaseExecutor {
     /// The transaction's connection, for raw PostgresNIO access.
@@ -122,7 +140,8 @@ extension Transaction: CursorExecutor {
     }
 }
 
-/// A parsed `postgres://` / `postgresql://` URL with an optional `sslmode` query parameter.
+/// A parsed `postgres://` / `postgresql://` URL with an optional `sslmode` query parameter. The pool and dedicated
+/// connections are both configured from it, so they connect the same way.
 struct DatabaseURL: Sendable {
     enum TLS {
         case disable
@@ -173,6 +192,18 @@ extension PostgresClient.Configuration {
             case .disable: .disable
             case .prefer(let configuration): .prefer(configuration)
             case .require(let configuration): .require(configuration)
+            }
+        self.init(host: url.host, port: url.port, username: url.username, password: url.password, database: url.database, tls: tls)
+    }
+}
+
+extension PostgresConnection.Configuration {
+    init(_ url: DatabaseURL) throws {
+        let tls: TLS =
+            switch url.tls {
+            case .disable: .disable
+            case .prefer(let configuration): .prefer(try NIOSSLContext(configuration: configuration))
+            case .require(let configuration): .require(try NIOSSLContext(configuration: configuration))
             }
         self.init(host: url.host, port: url.port, username: url.username, password: url.password, database: url.database, tls: tls)
     }

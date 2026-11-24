@@ -38,7 +38,7 @@ public protocol ManyToManyRelation: RelationLoad {}
 extension BelongsToRelation {
     public subscript<V: SQLType>(dynamicMember column: KeyPath<Target.Type, Column<Target, V>>) -> Expr<V.NonNull?> {
         let name = Target.self[keyPath: column].name
-        return Expr(.column(ColumnReference(table: Target.schema.table, name: name, path: relation.path)))
+        return Expr(.column(ColumnReference(table: Target.schema.tableName, name: name, path: relation.path)))
     }
 
     public subscript<Next: BelongsToRelation>(dynamicMember next: KeyPath<Target.Relations.Type, Next>) -> Next

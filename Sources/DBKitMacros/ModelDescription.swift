@@ -15,6 +15,8 @@ struct ModelDescription {
         let isAutoIncrement: Bool
         /// The Swift default from `var x: T = value`, used by the initializers and `Insert`.
         let defaultValue: String?
+        /// `@DatabaseDefault`: `Insert` takes `T?`, and `nil` lets the database fill the column.
+        let isDatabaseDefault: Bool
 
         /// The default parameter value in the initializers.
         var parameterDefault: String? { defaultValue ?? (isOptional ? "nil" : nil) }
@@ -52,6 +54,8 @@ struct ModelDescription {
     let name: String
     let access: String
     let table: String
+    /// The PostgreSQL schema of `schema:`, or `nil` for the search path's.
+    let schema: String?
     let fields: [Field]
     let relations: [RelationField]
     /// Property names that use ``reservedPrefix``. The member expansion reports them but still generates the model, so
@@ -75,8 +79,15 @@ struct ModelDescription {
         access =
             classDecl.modifiers.first { ["public", "package"].contains($0.name.text) }.map { $0.name.text + " " } ?? ""
 
-        let tableArgument = attribute.arguments?.as(LabeledExprListSyntax.self)?.first { $0.label?.text == "table" }
+        let arguments = attribute.arguments?.as(LabeledExprListSyntax.self)
+        let tableArgument = arguments?.first { $0.label?.text == "table" }
         table = tableArgument.flatMap { stringLiteral($0.expression) } ?? snakeCased(name)
+        schema = try arguments?.first { $0.label?.text == "schema" }.map { argument in
+            guard let schema = stringLiteral(argument.expression) else {
+                throw MacroExpansionErrorMessage("@Model needs a string literal `schema:` argument")
+            }
+            return schema
+        }
 
         var fields: [Field] = []
         var relations: [RelationField] = []
@@ -116,6 +127,12 @@ struct ModelDescription {
             let columnName = attributes.first { attributeName($0) == "ColumnName" }
                 .flatMap { $0.arguments?.as(LabeledExprListSyntax.self)?.first.flatMap { stringLiteral($0.expression) } }
             let type = typeAnnotation.type.trimmedDescription
+            let isOptional = typeAnnotation.type.is(OptionalTypeSyntax.self) || type.hasPrefix("Optional<")
+            let isDatabaseDefault = attributes.contains { attributeName($0) == "DatabaseDefault" }
+            if isDatabaseDefault, isOptional || binding.initializer != nil {
+                throw MacroExpansionErrorMessage(
+                    "@DatabaseDefault column '\(name)' can't be optional or have a Swift default; the database provides the value")
+            }
             let isAutoIncrement = attributes.contains { attributeName($0) == "AutoIncrement" }
             if isAutoIncrement, binding.initializer != nil {
                 throw MacroExpansionErrorMessage(
@@ -127,10 +144,11 @@ struct ModelDescription {
                     type: type,
                     column: columnName ?? snakeCased(plainName),
                     storage: storageName(of: identifier.identifier),
-                    isOptional: typeAnnotation.type.is(OptionalTypeSyntax.self) || type.hasPrefix("Optional<"),
+                    isOptional: isOptional,
                     isKey: attributes.contains { attributeName($0) == "Key" },
                     isAutoIncrement: isAutoIncrement,
-                    defaultValue: binding.initializer?.value.trimmedDescription
+                    defaultValue: binding.initializer?.value.trimmedDescription,
+                    isDatabaseDefault: isDatabaseDefault
                 )
             )
         }

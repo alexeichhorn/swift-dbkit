@@ -10,7 +10,7 @@ public struct Relation: Sendable {
     }
 
     struct Through: Sendable {
-        let table: String
+        let table: TableName
         /// Join-table column referencing the source.
         let sourceColumn: String
         /// Join-table column referencing the target.
@@ -19,6 +19,7 @@ public struct Relation: Sendable {
 
     let name: String
     let kind: Kind
+    let source: any Model.Type
     let target: any Model.Type
     /// Source-table column of the join condition (the foreign key for belongs-to, the referenced key otherwise).
     let sourceColumn: String
@@ -46,6 +47,7 @@ public struct Relation: Sendable {
         Relation(
             name: name,
             kind: .belongsTo,
+            source: Source.self,
             target: Target.self,
             sourceColumn: key.name,
             targetColumn: references.name,
@@ -63,6 +65,7 @@ public struct Relation: Sendable {
         Relation(
             name: name,
             kind: .hasMany,
+            source: Source.self,
             target: Target.self,
             sourceColumn: references.name,
             targetColumn: key.name,
@@ -81,7 +84,8 @@ public struct Relation: Sendable {
     ) -> Relation {
         Relation(
             name: name,
-            kind: .manyToMany(Relation.Through(table: Through.schema.table, sourceColumn: from.name, targetColumn: to.name)),
+            kind: .manyToMany(Relation.Through(table: Through.schema.tableName, sourceColumn: from.name, targetColumn: to.name)),
+            source: Source.self,
             target: Target.self,
             sourceColumn: sourceKey.name,
             targetColumn: targetKey.name,

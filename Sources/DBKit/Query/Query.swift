@@ -28,7 +28,7 @@ public struct Query<Row: Model>: SelectQuery {
     }
 
     /// Switches to a projection of the given expressions, decoded as a typed tuple:
-    /// `.select(UserModel.id, UserModel.email)` returns `(Int64, String?)` rows.
+    /// `.select(SaleModel.region, SQL.sum(SaleModel.amount))` returns `(String, Decimal?)` rows.
     public func select<each E: SQLExpression>(_ expressions: repeat each E) -> Projection<repeat (each E).Value> {
         var items: [SelectItem] = []
         for expression in repeat each expressions { items.append(SelectItem(node: expression.sqlNode, alias: nil)) }
@@ -44,7 +44,7 @@ public struct Query<Row: Model>: SelectQuery {
     }
 
     /// Switches to a projection into a `@Projection` type, which names every result column in code:
-    /// `.select(Contact.columns(name: UserModel.name, email: UserModel.email))`.
+    /// `.select(Totals.columns(saleCount: SQL.count(SaleModel.id), newest: SQL.max(SaleModel.createdAt)))`.
     public func select<T>(_ columns: ProjectionColumns<T>) -> ProjectionQuery<T> {
         let items = columns.nodes.map { SelectItem(node: $0, alias: nil) }
         return ProjectionQuery(statement: updating { $0.items = items }.statement, decode: columns.decode)
@@ -83,7 +83,7 @@ extension Query: ModelRowsQuery {
 
 extension Query where Row == Row.Base {
     init() {
-        self.init(statement: SelectStatement(table: Row.schema.table), plan: .base)
+        self.init(statement: SelectStatement(table: Row.schema.tableName), plan: .base)
     }
 
     /// Eager-loads a relation: `.with(\.todos)` turns `UserModel` rows into `UserModel.Loaded<…, [TodoModel]>`.

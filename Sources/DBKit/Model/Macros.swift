@@ -8,7 +8,8 @@
 /// reserved for the generated code.
 ///
 /// Column names default to the snake_case property name (`userID` → `user_id`); override with ``ColumnName(_:)``.
-/// The table name defaults to the snake_case type name.
+/// The table name defaults to the snake_case type name. `schema:` puts the table in a PostgreSQL schema, as in
+/// `@Model(table: "users", schema: "app")`; without it, PostgreSQL finds the table on its search path.
 ///
 /// ```swift
 /// @Model(table: "todos")
@@ -28,7 +29,7 @@
 @attached(
     extension, conformances: Model, Sendable, names: named(Base), named(schema), named(decodeBase), named(columnName), named(base),
     named(columnValues))
-public macro Model(table: String? = nil) = #externalMacro(module: "DBKitMacros", type: "ModelMacro")
+public macro Model(table: String? = nil, schema: String? = nil) = #externalMacro(module: "DBKitMacros", type: "ModelMacro")
 
 /// Makes a column read-only. `@Model` adds it to every column; not meant to be written by hand.
 @attached(accessor, names: named(init), named(get))
@@ -54,6 +55,12 @@ public macro Unique() = #externalMacro(module: "DBKitMacros", type: "MarkerMacro
 /// Documents an index. Metadata only: DBKit doesn't manage the schema.
 @attached(peer)
 public macro Index() = #externalMacro(module: "DBKitMacros", type: "MarkerMacro")
+
+/// A column the database fills on insert, e.g. `DEFAULT now()` in the migration: `@DatabaseDefault var createdAt: Date`.
+/// `Insert` takes the value as optional; `nil` writes SQL `DEFAULT`. The migration must declare the default, or the
+/// insert writes `NULL`.
+@attached(peer)
+public macro DatabaseDefault() = #externalMacro(module: "DBKitMacros", type: "MarkerMacro")
 
 /// Overrides the column name, e.g. `@ColumnName("type") var kind: String`.
 @attached(peer)
@@ -91,7 +98,7 @@ public macro ManyToMany<Through: Model>(through: Through.Type, from: String, to:
 /// Makes a struct the typed result of a `SELECT`. Generates `columns(…)` with one labelled parameter per stored
 /// property, each taking the SQL expression for it, so a missing column, a misspelled name and a wrong type are
 /// compile errors:
-/// `.select(Contact.columns(name: UserModel.name, isUS: UserModel.region == "us"))`.
+/// `.select(Totals.columns(saleCount: SQL.count(SaleModel.id), newest: SQL.max(SaleModel.createdAt)))`.
 ///
 /// The struct must be `Sendable` and keep its memberwise initializer, and every stored property needs a type
 /// annotation. A public struct has to declare `Sendable` itself.
