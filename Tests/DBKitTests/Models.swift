@@ -16,3 +16,10 @@ class TodoModel {
     var note: String?
     var isComplete: Bool = false
 }
+
+@Model(table: "order_lines")
+class OrderLineModel {
+    @Key var orderID: Int64
+    @Key var lineID: Int64
+    var note: String
+}

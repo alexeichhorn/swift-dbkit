@@ -164,6 +164,40 @@ class RolledBackNoteModel {
         }
     }
 
+    @Test func mutationsAndActiveModels() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            let inserted = try await UserModel.insert([
+                UserModel.Insert(name: "Alpha", email: "alpha@db.com"),
+                UserModel.Insert(name: "Beta", email: "beta@db.com", region: "us"),
+            ])
+            .execute(on: tx)
+            #expect(inserted == 2)
+            // Waits for slice 6: inserting "Dup" with `onConflictDoNothing(UserModel.email)` affects 0 rows, then
+            // `onConflict(UserModel.email, doUpdate: UserModel.name).returningAll().first(on:)` renames Alpha to "Alpha 2".
+            // Waits for slice 5: `active()` on "Alpha 2", `region = "eu"`, `update(on:)`; a new `ActiveModel<UserModel>`
+            // "Saved" with `save(on:)`, `id > 0`, and `saved.delete(on:) == 1` after the update below.
+            // Waits for slice 8: `update().set(UserModel.region, to: nil).filter(UserModel.region == "us").execute(on:) == 1`.
+            // Waits for slice 23: `count(on:) == 2`, `exists(on:)` for beta, `paginate(page: 2, perPage: 1, on:)`.
+            // Waits for slice 25: `stream(on:)` yields "Alpha 2" and "Beta".
+        }
+    }
+
+    @Test func mutationsCountAffectedRowsAndReturnDeletedRows() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            try await seedUsers(on: tx)
+            #expect(try await UserModel.update().set(UserModel.region, to: "apac").filter(UserModel.id >= 2).execute(on: tx) == 2)
+            #expect(try await UserModel.update().set(UserModel.name, to: "Nobody").filter(UserModel.id == 99).execute(on: tx) == 0)
+            // An empty insert sends no statement, since `INSERT … VALUES` needs a row.
+            #expect(try await UserModel.insert([]).execute(on: tx) == 0)
+
+            let deleted = try await UserModel.delete().filter(UserModel.region == "apac").returningAll().all(on: tx)
+            #expect(deleted.map(\.name).sorted() == ["Kim", "Sam"])
+            #expect(try await UserModel.query().all(on: tx).map(\.name) == ["Alex"])
+        }
+    }
+
     @Test func transactionsCommitWhenTheBodyReturns() async throws {
         try await withRealTable("committed_notes", columns: "id BIGSERIAL PRIMARY KEY, body TEXT NOT NULL") { db in
             let id = try await db.transaction { tx in

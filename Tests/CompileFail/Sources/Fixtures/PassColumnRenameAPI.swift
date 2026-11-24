@@ -26,6 +26,9 @@ private func useRenamedColumns() {
         .filter(RenamedParentModel.kind == "primary")
         .filter(RenamedParentModel.externalReference == "ref-1")
         .render()
-    // Waits for slice 4: `RenamedParentModel.Insert` with the renamed columns and `update().set` on them.
+    _ = RenamedParentModel.insert(RenamedParentModel.Insert(kind: "primary", externalReference: "ref-1", label: "Example"))
+    _ = RenamedParentModel.update()
+        .set(RenamedParentModel.kind, to: "secondary")
+        .set(RenamedParentModel.externalReference, to: "ref-2")
     // Waits for slice 17: the `children`/`parent` relations and a loaded parent's `children`.
 }

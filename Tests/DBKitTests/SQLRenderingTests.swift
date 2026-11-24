@@ -39,4 +39,32 @@ import Testing
         #expect(empty.sql == #"SELECT "todos".* FROM "todos" WHERE FALSE AND TRUE"#)
         #expect(empty.binds.isEmpty)
     }
+
+    @Test func mutations() {
+        let insert = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
+            .returningAll()
+            .render()
+        #expect(insert.sql == #"INSERT INTO "users" ("name", "email", "region") VALUES ($1, $2, NULL) RETURNING *"#)
+        // Waits for slice 6: `.onConflict(UserModel.email, doUpdate: UserModel.name, UserModel.region)` on this insert,
+        // rendering `ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name", "region" = EXCLUDED."region"` before
+        // `RETURNING *`, and the same SQL with the update columns kept in a tuple constant.
+        // Waits for slices 8, 10 and 26: `TaskModel.update()` setting an enum `state`, `previousState` to `nil` and
+        // `attempts` to `TaskModel.attempts + 1`.
+        // Waits for slice 21: `TaskModel.delete().whereExists(…)` with a correlated `ProjectModel` subquery.
+    }
+
+    @Test func insertDefaultsAndMutationsWithoutReturning() {
+        // `note` defaults to `nil` and `isComplete` to its Swift default; the auto-increment `id` is left out.
+        let defaults = TodoModel.insert(TodoModel.Insert(userID: 2, title: "Ship it")).render()
+        #expect(defaults.sql == #"INSERT INTO "todos" ("user_id", "title", "note", "is_complete") VALUES ($1, $2, NULL, $3)"#)
+        #expect(defaults.binds.map(\.description) == ["2", "Ship it", "false"])
+        let explicit = TodoModel.insert(TodoModel.Insert(userID: 2, title: "Ship it", note: "today", isComplete: true)).render()
+        #expect(explicit.sql == #"INSERT INTO "todos" ("user_id", "title", "note", "is_complete") VALUES ($1, $2, $3, $4)"#)
+        #expect(explicit.binds.map(\.description) == ["2", "Ship it", "today", "true"])
+
+        #expect(TodoModel.delete().render().sql == #"DELETE FROM "todos""#)
+        let deleted = TodoModel.delete().filter(TodoModel.userID == 2).returningAll().render()
+        #expect(deleted.sql == #"DELETE FROM "todos" WHERE "todos"."user_id" = $1 RETURNING *"#)
+        #expect(deleted.binds.map(\.description) == ["2"])
+    }
 }
