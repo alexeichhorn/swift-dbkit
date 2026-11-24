@@ -32,6 +32,10 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - `hasPrefix` and `SQL.startsWith` with a nullable prefix, giving `Bool?`
 - `SQL.coalesce` with a required first argument
 - `SQL.least` and `SQL.greatest` with one required and one nullable expression, giving a required result
+- Text functions take nullable arguments in every position (patterns, fills, character sets, replacements, delimiters, counts), and the result is nullable when any argument is
+- Counts, starts, lengths and indexes of text functions take any `Int32` expression, not only a literal, and values and expressions mix
+- `SQL.split` with a nullable delimiter, which splits into characters and stays non-null
+- `SQL.concat()` and `SQL.concatWithSeparator(separator)` without values render valid SQL
 
 ## Left Out
 

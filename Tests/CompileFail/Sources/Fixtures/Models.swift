@@ -54,6 +54,17 @@ class MethodSampleModel {
     var optionalBool: Bool?
 }
 
+/// rust-dbkit's `TextSample` of the string function fixtures.
+@Model(table: "text_samples")
+class TextSampleModel {
+    @Key var id: Int64
+    var title: String
+    var pattern: String
+    var body: String?
+    var width: Int32
+    var optionalWidth: Int32?
+}
+
 /// rust-dbkit's `Sale` of the `fail_filter_*` fixtures.
 @Model(table: "sales")
 class SaleModel {

@@ -29,6 +29,8 @@ class CompilerTextSampleModel {
     var optionalWidth: Int32?
 }
 
+private typealias TS = CompilerTextSampleModel
+
 /// The `window_rows` table of rust-dbkit's `sql_compiler.rs`. `Date` stands in for its `timestamp` column.
 @Model(table: "window_rows")
 class CompilerWindowRowModel {
@@ -595,5 +597,317 @@ class CompilerWindowRowModel {
         #expect(
             rendered.sql == #"SELECT "sales".* FROM "sales" WHERE DATE_TRUNC('day', "sales"."created_at") BETWEEN $1 AND $2"#)
         #expect(rendered.binds.map { $0.value as? Date } == [start, end])
+    }
+
+    @Test func compilesNestedCharLengthTrimFilterOnNullableText() {
+        let predicate: Expr<Bool?> = SQL.charLength(SQL.trim(TS.body)) >= 5
+        let rendered = TS.query().filter(TS.body.isNotNull).filter(predicate).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "text_samples".* FROM "text_samples" WHERE "text_samples"."body" IS NOT NULL AND CHAR_LENGTH(TRIM("text_samples"."body")) >= $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["5"])
+    }
+
+    @Test func compilesByteAndBitLengthWithPostgresqlNames() {
+        let literalBytes: Expr<Int32> = SQL.byteLength("é")
+        let titleBytes: Expr<Int32> = SQL.byteLength(TS.title)
+        let trimmedBodyBits: Expr<Int32?> = SQL.bitLength(SQL.trim(TS.body))
+        let query: Projection<Int32, Int32, Int32?> = TS.query()
+            .select(literalBytes.as("literal_bytes"), titleBytes.as("title_bytes"), trimmedBodyBits.as("trimmed_body_bits"))
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT OCTET_LENGTH($1) AS "literal_bytes", OCTET_LENGTH("text_samples"."title") AS "title_bytes", BIT_LENGTH(TRIM("text_samples"."body")) AS "trimmed_body_bits" FROM "text_samples""#
+        )
+        #expect(rendered.binds.map(\.description) == ["é"])
+    }
+
+    /// A nullable search text makes the position nullable, as a nullable prefix does.
+    @Test func compilesPositionAndStartsWithWithExpressionArguments() {
+        let normalizedPosition: Expr<Int32?> = SQL.position(SQL.lower(TS.title), SQL.trim(TS.body))
+        let normalizedPrefix: Expr<Bool?> = SQL.startsWith(SQL.lower(TS.title), SQL.lower(TS.body))
+        let rendered = TS.query()
+            .select(normalizedPosition.as("normalized_position"), normalizedPrefix.as("normalized_prefix"))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT STRPOS(LOWER("text_samples"."title"), TRIM("text_samples"."body")) AS "normalized_position", STARTS_WITH(LOWER("text_samples"."title"), LOWER("text_samples"."body")) AS "normalized_prefix" FROM "text_samples""#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func compilesStringSearchAndLengthsInProjectionsFiltersAndOrderings() {
+        let unsafeSearch = "'%_\\needle"
+        let rendered = TS.query()
+            .select(
+                SQL.byteLength(TS.body).as("body_bytes"),
+                SQL.bitLength(TS.title).as("title_bits"),
+                SQL.position(TS.title, unsafeSearch).as("unsafe_position"),
+                SQL.startsWith(TS.title, unsafeSearch).as("unsafe_prefix")
+            )
+            .filter(SQL.startsWith(TS.title, "prefix") == true)
+            .filter(SQL.position(TS.title, "needle") > 0)
+            .orderBy(SQL.byteLength(TS.body).desc)
+            .orderBy(SQL.position(TS.title, "needle").asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT OCTET_LENGTH("text_samples"."body") AS "body_bytes", BIT_LENGTH("text_samples"."title") AS "title_bits", STRPOS("text_samples"."title", $1) AS "unsafe_position", STARTS_WITH("text_samples"."title", $2) AS "unsafe_prefix" FROM "text_samples" WHERE STARTS_WITH("text_samples"."title", $3) = $4 AND STRPOS("text_samples"."title", $5) > $6 ORDER BY OCTET_LENGTH("text_samples"."body") DESC, STRPOS("text_samples"."title", $7) ASC"#
+        )
+        #expect(rendered.binds.map(\.description) == [unsafeSearch, unsafeSearch, "prefix", "true", "needle", "0", "needle"])
+    }
+
+    /// rust-dbkit selects `id` without an alias, which `select` can't mix with aliased expressions, so it is aliased `id`.
+    @Test func compilesTrimmedNullableTextSelection() {
+        let query: Projection<Int64, String?, Int32?> = TS.query()
+            .select(
+                TS.id.as("id"),
+                SQL.trim(TS.body).as("trimmed_body"),
+                SQL.charLength(SQL.trim(TS.body)).as("trimmed_body_len")
+            )
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "text_samples"."id" AS "id", TRIM("text_samples"."body") AS "trimmed_body", CHAR_LENGTH(TRIM("text_samples"."body")) AS "trimmed_body_len" FROM "text_samples""#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
+    /// "Normalization" here is trimming and case conversion, not Unicode normalization.
+    @Test func compilesStringNormalizationInProjectionsFilterAndOrdering() {
+        let trimmedBody: Expr<String?> = SQL.trimEndChars(TS.body, "!?")
+        let rendered = TS.query()
+            .select(
+                SQL.lower(TS.title).as("lowered_title"),
+                SQL.trimChars(TS.title, "xy").as("trimmed_title"),
+                SQL.trimStart(TS.title).as("left_trimmed_title"),
+                SQL.trimStartChars(TS.title, "@").as("handle"),
+                SQL.trimEnd(TS.body).as("right_trimmed_body"),
+                trimmedBody.as("punctuation_trimmed_body")
+            )
+            .filter(SQL.trimChars(TS.title, ".") == "alpha")
+            .orderBy(SQL.trimStartChars(TS.title, "#").asc)
+            .orderBy(SQL.trimEnd(TS.body).desc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT LOWER("text_samples"."title") AS "lowered_title", TRIM(BOTH $1 FROM "text_samples"."title") AS "trimmed_title", TRIM(LEADING FROM "text_samples"."title") AS "left_trimmed_title", TRIM(LEADING $2 FROM "text_samples"."title") AS "handle", TRIM(TRAILING FROM "text_samples"."body") AS "right_trimmed_body", TRIM(TRAILING $3 FROM "text_samples"."body") AS "punctuation_trimmed_body" FROM "text_samples" WHERE TRIM(BOTH $4 FROM "text_samples"."title") = $5 ORDER BY TRIM(LEADING $6 FROM "text_samples"."title") ASC, TRIM(TRAILING FROM "text_samples"."body") DESC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["xy", "@", "!?", ".", "alpha", "#"])
+    }
+
+    @Test func customTrimCharactersAreBoundInSQLOrder() {
+        let predicate: Expr<Bool> = SQL.trimChars(SQL.trimStartChars(TS.title, "'\\"), "[]") == "alpha"
+        let rendered = TS.query().filter(predicate).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "text_samples".* FROM "text_samples" WHERE TRIM(BOTH $1 FROM TRIM(LEADING $2 FROM "text_samples"."title")) = $3"#
+        )
+        #expect(rendered.binds.map(\.description) == ["[]", "'\\", "alpha"])
+    }
+
+    @Test func compilesNormalizedHandleLookup() {
+        let handle = "alice"
+        let normalized: Expr<String> = SQL.lower(SQL.trim(SQL.trimStartChars(SQL.trim(TS.title), "@")))
+        let rendered = TS.query().filter(normalized == handle).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "text_samples".* FROM "text_samples" WHERE LOWER(TRIM(TRIM(LEADING $1 FROM TRIM("text_samples"."title")))) = $2"#
+        )
+        #expect(rendered.binds.map(\.description) == ["@", handle])
+    }
+
+    /// Counts take an `Int32` value or expression, also mixed in one call.
+    @Test func compilesStringExtractionAndSizingFunctionsWithExpectedTypes() {
+        let leftTitle: Expr<String> = SQL.left(TS.title, 2)
+        let rightBody: Expr<String?> = SQL.right(TS.body, TS.width)
+        let substringTitle: Expr<String> = SQL.substring(SQL.lower(TS.title), 2, TS.width)
+        let repeatedLiteral: Expr<String> = SQL.repeat("ab", 3)
+        let paddedTitle: Expr<String> = SQL.padStart(TS.title, 8, "xy")
+        let paddedBody: Expr<String?> = SQL.padEnd(TS.body, SQL.charLength(TS.title), SQL.lower("Z"))
+
+        let query: Projection<String, String?, String, String, String, String?> = TS.query()
+            .select(
+                leftTitle.as("left_title"),
+                rightBody.as("right_body"),
+                substringTitle.as("substring_title"),
+                repeatedLiteral.as("repeated_literal"),
+                paddedTitle.as("padded_title"),
+                paddedBody.as("padded_body")
+            )
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT LEFT("text_samples"."title", $1) AS "left_title", RIGHT("text_samples"."body", "text_samples"."width") AS "right_body", SUBSTRING(LOWER("text_samples"."title"), $2, "text_samples"."width") AS "substring_title", REPEAT($3, $4) AS "repeated_literal", LPAD("text_samples"."title", $5, $6) AS "padded_title", RPAD("text_samples"."body", CHAR_LENGTH("text_samples"."title"), LOWER($7)) AS "padded_body" FROM "text_samples""#
+        )
+        #expect(rendered.binds.map(\.description) == ["2", "2", "ab", "3", "8", "xy", "Z"])
+    }
+
+    /// A nullable count, start, length or index makes the result nullable, as PostgreSQL returns NULL for it.
+    @Test func compilesStringFunctionsWithNullableNumericArguments() {
+        let left: Expr<String?> = SQL.left(TS.title, TS.optionalWidth)
+        let right: Expr<String?> = SQL.right(TS.title, TS.optionalWidth)
+        let substringStart: Expr<String?> = SQL.substring(TS.title, TS.optionalWidth, TS.width)
+        let substringCount: Expr<String?> = SQL.substring(TS.title, TS.width, TS.optionalWidth)
+        let repeated: Expr<String?> = SQL.repeat(TS.title, TS.optionalWidth)
+        let paddedStart: Expr<String?> = SQL.padStart(TS.title, TS.optionalWidth, "x")
+        let paddedEnd: Expr<String?> = SQL.padEnd(TS.body, TS.optionalWidth, "x")
+        let replacedStart: Expr<String?> = SQL.replaceRange(TS.title, "X", TS.optionalWidth, TS.width)
+        let replacedCount: Expr<String?> = SQL.replaceRange(TS.title, "X", TS.width, TS.optionalWidth)
+        let part: Expr<String?> = SQL.splitPart(TS.title, ",", TS.optionalWidth)
+
+        let rendered = TS.query()
+            .select(
+                left.as("left_value"),
+                right.as("right_value"),
+                substringStart.as("substring_start"),
+                substringCount.as("substring_count"),
+                repeated.as("repeated"),
+                paddedStart.as("padded_start"),
+                paddedEnd.as("padded_end"),
+                replacedStart.as("replaced_start"),
+                replacedCount.as("replaced_count"),
+                part.as("part")
+            )
+            .filter(SQL.left(TS.title, TS.optionalWidth) == "ab")
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT LEFT("text_samples"."title", "text_samples"."optional_width") AS "left_value", RIGHT("text_samples"."title", "text_samples"."optional_width") AS "right_value", SUBSTRING("text_samples"."title", "text_samples"."optional_width", "text_samples"."width") AS "substring_start", SUBSTRING("text_samples"."title", "text_samples"."width", "text_samples"."optional_width") AS "substring_count", REPEAT("text_samples"."title", "text_samples"."optional_width") AS "repeated", LPAD("text_samples"."title", "text_samples"."optional_width", $1) AS "padded_start", RPAD("text_samples"."body", "text_samples"."optional_width", $2) AS "padded_end", OVERLAY("text_samples"."title", $3, "text_samples"."optional_width", "text_samples"."width") AS "replaced_start", OVERLAY("text_samples"."title", $4, "text_samples"."width", "text_samples"."optional_width") AS "replaced_count", SPLIT_PART("text_samples"."title", $5, "text_samples"."optional_width") AS "part" FROM "text_samples" WHERE LEFT("text_samples"."title", "text_samples"."optional_width") = $6"#
+        )
+        #expect(rendered.binds.map(\.description) == ["x", "x", "X", "X", ",", "ab"])
+    }
+
+    @Test func compilesNestedStringFunctionsInProjectionFilterAndOrdering() {
+        let fill = "'%_\\"
+        let query: Projection<String> = TS.query()
+            .select(SQL.substring(SQL.left(SQL.lower(TS.title), 5), 2, 3).as("slice"))
+            .filter(SQL.repeat(SQL.right(SQL.trim(TS.title), 2), 2) == "abab")
+            .orderBy(SQL.padEnd(SQL.left(TS.body, 4), 8, fill).asc)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT SUBSTRING(LEFT(LOWER("text_samples"."title"), $1), $2, $3) AS "slice" FROM "text_samples" WHERE REPEAT(RIGHT(TRIM("text_samples"."title"), $4), $5) = $6 ORDER BY RPAD(LEFT("text_samples"."body", $7), $8, $9) ASC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["5", "2", "3", "2", "2", "abab", "4", "8", fill])
+    }
+
+    /// A nullable text in any argument makes the result nullable.
+    @Test func compilesTextTransformationFunctionsWithExpectedTypesAndPostgresqlNames() {
+        let titled: Expr<String> = SQL.titleCase(TS.title)
+        let reversed: Expr<String?> = SQL.reverse(TS.body)
+        let replaced: Expr<String> = SQL.replace(SQL.lower(TS.title), "FROM_LITERAL", "TO_LITERAL")
+        let nullableReplace: Expr<String?> = SQL.replace(TS.title, TS.body, "fallback")
+        let ranged: Expr<String> = SQL.replaceRange(TS.title, SQL.upper("replacement"), TS.width, 2)
+        let nullableRange: Expr<String?> = SQL.replaceRange(TS.title, TS.body, 1, TS.width)
+        let translated: Expr<String> = SQL.translateChars(TS.title, "abc", "xyz")
+        let nullableTranslation: Expr<String?> = SQL.translateChars(TS.title, "abc", TS.body)
+
+        let rendered = TS.query()
+            .select(
+                titled.as("titled"),
+                reversed.as("reversed"),
+                replaced.as("replaced"),
+                nullableReplace.as("nullable_replace"),
+                ranged.as("ranged"),
+                nullableRange.as("nullable_range"),
+                translated.as("translated"),
+                nullableTranslation.as("nullable_translation")
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT INITCAP("text_samples"."title") AS "titled", REVERSE("text_samples"."body") AS "reversed", REPLACE(LOWER("text_samples"."title"), $1, $2) AS "replaced", REPLACE("text_samples"."title", "text_samples"."body", $3) AS "nullable_replace", OVERLAY("text_samples"."title", UPPER($4), "text_samples"."width", $5) AS "ranged", OVERLAY("text_samples"."title", "text_samples"."body", $6, "text_samples"."width") AS "nullable_range", TRANSLATE("text_samples"."title", $7, $8) AS "translated", TRANSLATE("text_samples"."title", $9, "text_samples"."body") AS "nullable_translation" FROM "text_samples""#
+        )
+        #expect(
+            rendered.binds.map(\.description) == [
+                "FROM_LITERAL", "TO_LITERAL", "fallback", "replacement", "2", "1", "abc", "xyz", "abc",
+            ])
+    }
+
+    @Test func textTransformationArgumentsRemainBoundWhenComposed() {
+        let unsafeText = "'%_\\[]().*+"
+        let transformed = SQL.reverse(SQL.translateChars(SQL.replace(TS.title, unsafeText, "<$&>"), "[]", "{}"))
+        let rendered = TS.query()
+            .select(SQL.titleCase(transformed).as("transformed"))
+            .filter(SQL.replaceRange(TS.body, unsafeText, 1, 2) == "expected")
+            .orderBy(SQL.reverse(SQL.translateChars(TS.body, "%_", "")).asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT INITCAP(REVERSE(TRANSLATE(REPLACE("text_samples"."title", $1, $2), $3, $4))) AS "transformed" FROM "text_samples" WHERE OVERLAY("text_samples"."body", $5, $6, $7) = $8 ORDER BY REVERSE(TRANSLATE("text_samples"."body", $9, $10)) ASC"#
+        )
+        #expect(
+            rendered.binds.map(\.description) == [unsafeText, "<$&>", "[]", "{}", unsafeText, "1", "2", "expected", "%_", ""])
+    }
+
+    /// rust-dbkit passes the values as an array; here they are arguments. PostgreSQL has no `CONCAT()` without
+    /// arguments, so no values render an empty `VARIADIC` array.
+    @Test func compilesStringCompositionFunctionsWithVariadicExpressionArrays() {
+        let separator = "'%_\\[](){}"
+        let joined: Expr<String> = SQL.concat(TS.title, SQL.lower("SUFFIX"), SQL.trim(TS.title))
+        let nullableInputsStillJoin: Expr<String> = SQL.concat(TS.body, SQL.lower(TS.body))
+        let separated: Expr<String> = SQL.concatWithSeparator(separator, TS.title, SQL.lower("SUFFIX"))
+        let nullableSeparator: Expr<String?> = SQL.concatWithSeparator(TS.body, TS.body, SQL.trim(TS.body))
+        let emptyJoined: Expr<String> = SQL.concat()
+        let emptySeparated: Expr<String> = SQL.concatWithSeparator("")
+
+        let rendered = TS.query()
+            .select(
+                joined.as("joined"),
+                nullableInputsStillJoin.as("nullable_inputs_still_join"),
+                separated.as("separated"),
+                nullableSeparator.as("nullable_separator"),
+                emptyJoined.as("empty_joined"),
+                emptySeparated.as("empty_separated")
+            )
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT CONCAT("text_samples"."title", LOWER($1), TRIM("text_samples"."title")) AS "joined", CONCAT("text_samples"."body", LOWER("text_samples"."body")) AS "nullable_inputs_still_join", CONCAT_WS($2, "text_samples"."title", LOWER($3)) AS "separated", CONCAT_WS("text_samples"."body", "text_samples"."body", TRIM("text_samples"."body")) AS "nullable_separator", CONCAT(VARIADIC ARRAY[]::TEXT[]) AS "empty_joined", CONCAT_WS($4, VARIADIC ARRAY[]::TEXT[]) AS "empty_separated" FROM "text_samples""#
+        )
+        #expect(rendered.binds.map(\.description) == ["SUFFIX", separator, "SUFFIX", ""])
+    }
+
+    /// A nullable delimiter doesn't make `split` nullable: PostgreSQL splits into characters for a NULL delimiter.
+    @Test func compilesSplitFunctionsWithExactTypesAndBindOrder() {
+        let delimiter = "'%_\\.*+?[](){}^$|"
+        let parts: Expr<[String]> = SQL.split(TS.title, delimiter)
+        let nullableParts: Expr<[String]?> = SQL.split(TS.body, SQL.lower("::"))
+        let nullDelimiterParts: Expr<[String]> = SQL.split(TS.title, TS.body)
+        let part: Expr<String> = SQL.splitPart(TS.title, delimiter, TS.width)
+        let nullablePart: Expr<String?> = SQL.splitPart(TS.body, SQL.lower("::"), SQL.charLength(TS.title))
+
+        let query: Projection<[String], [String]?, [String], String, String?> = TS.query()
+            .select(
+                parts.as("parts"),
+                nullableParts.as("nullable_parts"),
+                nullDelimiterParts.as("null_delimiter_parts"),
+                part.as("part"),
+                nullablePart.as("nullable_part")
+            )
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT STRING_TO_ARRAY("text_samples"."title", $1) AS "parts", STRING_TO_ARRAY("text_samples"."body", LOWER($2)) AS "nullable_parts", STRING_TO_ARRAY("text_samples"."title", "text_samples"."body") AS "null_delimiter_parts", SPLIT_PART("text_samples"."title", $3, "text_samples"."width") AS "part", SPLIT_PART("text_samples"."body", LOWER($4), CHAR_LENGTH("text_samples"."title")) AS "nullable_part" FROM "text_samples""#
+        )
+        #expect(rendered.binds.map(\.description) == [delimiter, "::", delimiter, "::"])
+    }
+
+    @Test func composesStringSplittingInProjectionsFiltersAndOrderings() {
+        let nested: Expr<String> = SQL.splitPart(SQL.concat(TS.title, SQL.lower("SUFFIX")), "::", 1)
+        let rendered = TS.query()
+            .select(SQL.split(SQL.lower(TS.title), "::").as("parts"), nested.as("first_part"))
+            .filter(SQL.splitPart(TS.title, "::", 1) == "prefix")
+            .filter(SQL.split(TS.title, "::") == ["prefix"])
+            .orderBy(SQL.splitPart(TS.body, "::", TS.width).asc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT STRING_TO_ARRAY(LOWER("text_samples"."title"), $1) AS "parts", SPLIT_PART(CONCAT("text_samples"."title", LOWER($2)), $3, $4) AS "first_part" FROM "text_samples" WHERE SPLIT_PART("text_samples"."title", $5, $6) = $7 AND STRING_TO_ARRAY("text_samples"."title", $8) = $9 ORDER BY SPLIT_PART("text_samples"."body", $10, "text_samples"."width") ASC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["::", "SUFFIX", "::", "1", "::", "1", "prefix", "::", #"["prefix"]"#, "::"])
+        #expect(rendered.binds[8].value as? [String] == ["prefix"])
     }
 }

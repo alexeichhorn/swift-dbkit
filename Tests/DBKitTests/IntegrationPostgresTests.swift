@@ -1053,6 +1053,1017 @@ import Testing
             #expect(matches.map(\.id).sorted() == [exact.id, padded.id])
         }
     }
+
+    @Test func charLengthOfTrimmedNullableTextFiltersRows() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "short", body: "  abc  ")
+            let long = try await seedTextSample(on: tx, label: "long", body: "  abcdef  ")
+            let spaced = try await seedTextSample(on: tx, label: "spaced", body: "     abcde     ")
+            _ = try await seedTextSample(on: tx, label: "blank", body: "    ")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+
+            let matches = try await TextSampleModel.query()
+                .filter(TextSampleModel.body.isNotNull)
+                .filter(SQL.charLength(SQL.trim(TextSampleModel.body)) >= 5)
+                .all(on: tx)
+            #expect(matches.map(\.id).sorted() == [long.id, spaced.id])
+        }
+    }
+
+    @Test func stringLengthsDistinguishCharactersBytesAndBits() async throws {
+        struct StringLengthResult: Decodable, Equatable {
+            let label: String
+            let characters: Int32?
+            let bytes: Int32?
+            let bits: Int32?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "ascii", body: "abc")
+            _ = try await seedTextSample(on: tx, label: "unicode", body: "é🙂")
+            _ = try await seedTextSample(on: tx, label: "empty", body: "")
+            _ = try await seedTextSample(on: tx, label: "whitespace", body: " \t")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("label"),
+                    SQL.charLength(TextSampleModel.body).as("characters"),
+                    SQL.byteLength(TextSampleModel.body).as("bytes"),
+                    SQL.bitLength(TextSampleModel.body).as("bits")
+                )
+                .orderBy(TextSampleModel.id.asc)
+                .all(as: StringLengthResult.self, on: tx)
+            #expect(
+                rows == [
+                    StringLengthResult(label: "ascii", characters: 3, bytes: 3, bits: 24),
+                    StringLengthResult(label: "unicode", characters: 2, bytes: 6, bits: 48),
+                    StringLengthResult(label: "empty", characters: 0, bytes: 0, bits: 0),
+                    StringLengthResult(label: "whitespace", characters: 2, bytes: 2, bits: 16),
+                    StringLengthResult(label: "missing", characters: nil, bytes: nil, bits: nil),
+                ])
+        }
+    }
+
+    @Test func stringSearchesCoverPostgresqlBoundariesAndNulls() async throws {
+        struct StringSearchResult: Decodable, Equatable {
+            let needle: String
+            let position: Int32?
+            let startsWith: Bool?
+            let reversePosition: Int32?
+            let reverseStartsWith: Bool?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "", body: "abc")
+            _ = try await seedTextSample(on: tx, label: "abc", body: "abc")
+            _ = try await seedTextSample(on: tx, label: "abcd", body: "abc")
+            _ = try await seedTextSample(on: tx, label: "bc", body: "abcabc")
+            _ = try await seedTextSample(on: tx, label: "aba", body: "xababa")
+            _ = try await seedTextSample(on: tx, label: "A", body: "abc")
+            _ = try await seedTextSample(on: tx, label: "é🙂", body: "xé🙂é")
+            _ = try await seedTextSample(on: tx, label: "x", body: "abc")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("needle"),
+                    SQL.position(TextSampleModel.body, TextSampleModel.label).as("position"),
+                    SQL.startsWith(TextSampleModel.body, TextSampleModel.label).as("starts_with"),
+                    SQL.position(TextSampleModel.label, TextSampleModel.body).as("reverse_position"),
+                    SQL.startsWith(TextSampleModel.label, TextSampleModel.body).as("reverse_starts_with")
+                )
+                .orderBy(TextSampleModel.id.asc)
+                .all(as: StringSearchResult.self, on: tx)
+            #expect(
+                rows == [
+                    StringSearchResult(needle: "", position: 1, startsWith: true, reversePosition: 0, reverseStartsWith: false),
+                    StringSearchResult(needle: "abc", position: 1, startsWith: true, reversePosition: 1, reverseStartsWith: true),
+                    StringSearchResult(needle: "abcd", position: 0, startsWith: false, reversePosition: 1, reverseStartsWith: true),
+                    StringSearchResult(needle: "bc", position: 2, startsWith: false, reversePosition: 0, reverseStartsWith: false),
+                    StringSearchResult(needle: "aba", position: 2, startsWith: false, reversePosition: 0, reverseStartsWith: false),
+                    StringSearchResult(needle: "A", position: 0, startsWith: false, reversePosition: 0, reverseStartsWith: false),
+                    StringSearchResult(needle: "é🙂", position: 2, startsWith: false, reversePosition: 0, reverseStartsWith: false),
+                    StringSearchResult(needle: "x", position: 0, startsWith: false, reversePosition: 0, reverseStartsWith: false),
+                    StringSearchResult(needle: "missing", position: nil, startsWith: nil, reversePosition: nil, reverseStartsWith: nil),
+                ])
+        }
+    }
+
+    @Test func stringSearchArgumentsRemainBoundValues() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let search = "'%_\\); DROP TABLE text_samples; --"
+            let row = try await seedTextSample(on: tx, label: "\(search)suffix", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.position(TextSampleModel.label, search).as("position"),
+                        SQL.startsWith(TextSampleModel.label, search).as("starts_with")
+                    )
+                    .filter(TextSampleModel.id == row.id)
+                    .first(on: tx))
+            #expect(result.0 == 1)
+            #expect(result.1)
+        }
+    }
+
+    /// "Normalization" here is trimming and case conversion, not Unicode normalization.
+    @Test func stringNormalizationPreservesDirectionAndNullability() async throws {
+        struct WhitespaceNormalizationResult: Decodable, Equatable {
+            let label: String
+            let lowered: String?
+            let trimmed: String?
+            let startTrimmed: String?
+            let endTrimmed: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "mixed", body: "  MiXeD  ")
+            _ = try await seedTextSample(on: tx, label: "lower", body: "already lower")
+            _ = try await seedTextSample(on: tx, label: "empty", body: "")
+            _ = try await seedTextSample(on: tx, label: "spaces", body: "   ")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("label"),
+                    SQL.lower(TextSampleModel.body).as("lowered"),
+                    SQL.trim(TextSampleModel.body).as("trimmed"),
+                    SQL.trimStart(TextSampleModel.body).as("start_trimmed"),
+                    SQL.trimEnd(TextSampleModel.body).as("end_trimmed")
+                )
+                .orderBy(TextSampleModel.label.asc)
+                .all(as: WhitespaceNormalizationResult.self, on: tx)
+            #expect(
+                rows == [
+                    WhitespaceNormalizationResult(label: "empty", lowered: "", trimmed: "", startTrimmed: "", endTrimmed: ""),
+                    WhitespaceNormalizationResult(
+                        label: "lower", lowered: "already lower", trimmed: "already lower", startTrimmed: "already lower",
+                        endTrimmed: "already lower"),
+                    WhitespaceNormalizationResult(label: "missing", lowered: nil, trimmed: nil, startTrimmed: nil, endTrimmed: nil),
+                    WhitespaceNormalizationResult(
+                        label: "mixed", lowered: "  mixed  ", trimmed: "MiXeD", startTrimmed: "MiXeD  ", endTrimmed: "  MiXeD"),
+                    WhitespaceNormalizationResult(label: "spaces", lowered: "   ", trimmed: "", startTrimmed: "", endTrimmed: ""),
+                ])
+        }
+    }
+
+    @Test func customTrimUsesACharacterSetAndHandlesEdgeCases() async throws {
+        struct CustomTrimResult: Decodable, Equatable {
+            let label: String
+            let original: String?
+            let both: String?
+            let start: String?
+            let end: String?
+            let emptySet: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "all", body: "xyyx")
+            _ = try await seedTextSample(on: tx, label: "blocked", body: " xalphay ")
+            _ = try await seedTextSample(on: tx, label: "empty", body: "")
+            _ = try await seedTextSample(on: tx, label: "internal", body: "xyxyalxphayx")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+            _ = try await seedTextSample(on: tx, label: "no_match", body: "alpha")
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("label"),
+                    TextSampleModel.body.as("original"),
+                    SQL.trimChars(TextSampleModel.body, "xy").as("both"),
+                    SQL.trimStartChars(TextSampleModel.body, "xy").as("start"),
+                    SQL.trimEndChars(TextSampleModel.body, "xy").as("end"),
+                    SQL.trimChars(TextSampleModel.body, "").as("empty_set")
+                )
+                .orderBy(TextSampleModel.label.asc)
+                .all(as: CustomTrimResult.self, on: tx)
+            #expect(
+                rows == [
+                    CustomTrimResult(label: "all", original: "xyyx", both: "", start: "", end: "", emptySet: "xyyx"),
+                    CustomTrimResult(
+                        label: "blocked", original: " xalphay ", both: " xalphay ", start: " xalphay ", end: " xalphay ",
+                        emptySet: " xalphay "),
+                    CustomTrimResult(label: "empty", original: "", both: "", start: "", end: "", emptySet: ""),
+                    CustomTrimResult(
+                        label: "internal", original: "xyxyalxphayx", both: "alxpha", start: "alxphayx", end: "xyxyalxpha",
+                        emptySet: "xyxyalxphayx"),
+                    CustomTrimResult(label: "missing", original: nil, both: nil, start: nil, end: nil, emptySet: nil),
+                    CustomTrimResult(label: "no_match", original: "alpha", both: "alpha", start: "alpha", end: "alpha", emptySet: "alpha"),
+                ])
+
+            let unicode = try await seedTextSample(on: tx, label: "unicode", body: "ééalphéaé")
+            let escaped = try await seedTextSample(on: tx, label: "escaped", body: "'\\alpha\\'")
+
+            let unicodeMatch = try #require(
+                try await TextSampleModel.query().filter(SQL.trimChars(TextSampleModel.body, "é") == "alphéa").first(on: tx))
+            #expect(unicodeMatch.id == unicode.id)
+
+            let escapedMatch = try #require(
+                try await TextSampleModel.query()
+                    .filter(TextSampleModel.label == "escaped")
+                    .filter(SQL.trimChars(TextSampleModel.body, "'\\") == "alpha")
+                    .first(on: tx))
+            #expect(escapedMatch.id == escaped.id)
+        }
+    }
+
+    /// A NULL fill or character set makes the result NULL.
+    @Test func nullablePaddingFillAndTrimCharacterSetsFollowPostgresSemantics() async throws {
+        struct NullableStringControlArgumentResult: Decodable, Equatable {
+            let label: String
+            let startPadded: String?
+            let endPadded: String?
+            let bothTrimmed: String?
+            let startTrimmed: String?
+            let endTrimmed: String?
+            let nullableSourceAndFill: String?
+            let nullableSourceAndCharacters: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "empty", body: "")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+            _ = try await seedTextSample(on: tx, label: "present", body: "xy")
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("label"),
+                    SQL.padStart("ab", 5, TextSampleModel.body).as("start_padded"),
+                    SQL.padEnd("ab", 5, TextSampleModel.body).as("end_padded"),
+                    SQL.trimChars("xyhelloyx", TextSampleModel.body).as("both_trimmed"),
+                    SQL.trimStartChars("xyhelloyx", TextSampleModel.body).as("start_trimmed"),
+                    SQL.trimEndChars("xyhelloyx", TextSampleModel.body).as("end_trimmed"),
+                    SQL.padStart(TextSampleModel.body, 5, TextSampleModel.body).as("nullable_source_and_fill"),
+                    SQL.trimChars(TextSampleModel.body, TextSampleModel.body).as("nullable_source_and_characters")
+                )
+                .orderBy(TextSampleModel.label.asc)
+                .all(as: NullableStringControlArgumentResult.self, on: tx)
+            #expect(
+                rows == [
+                    NullableStringControlArgumentResult(
+                        label: "empty", startPadded: "ab", endPadded: "ab", bothTrimmed: "xyhelloyx", startTrimmed: "xyhelloyx",
+                        endTrimmed: "xyhelloyx", nullableSourceAndFill: "", nullableSourceAndCharacters: ""),
+                    NullableStringControlArgumentResult(
+                        label: "missing", startPadded: nil, endPadded: nil, bothTrimmed: nil, startTrimmed: nil, endTrimmed: nil,
+                        nullableSourceAndFill: nil, nullableSourceAndCharacters: nil),
+                    NullableStringControlArgumentResult(
+                        label: "present", startPadded: "xyxab", endPadded: "abxyx", bothTrimmed: "hello", startTrimmed: "helloyx",
+                        endTrimmed: "xyhello", nullableSourceAndFill: "xyxxy", nullableSourceAndCharacters: ""),
+                ])
+        }
+    }
+
+    @Test func nestedNormalizedHandleLookupMatchesEquivalentInputs() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let canonical = try await seedTextSample(on: tx, label: "alice", body: nil)
+            let spaced = try await seedTextSample(on: tx, label: " Alice ", body: nil)
+            let prefixed = try await seedTextSample(on: tx, label: "@Alice", body: nil)
+            let revealedSpace = try await seedTextSample(on: tx, label: " @ Alice ", body: nil)
+            let repeatedPrefix = try await seedTextSample(on: tx, label: "@@@ALICE", body: nil)
+            _ = try await seedTextSample(on: tx, label: "bob", body: nil)
+
+            let handle = "alice"
+            let normalized = SQL.lower(SQL.trim(SQL.trimStartChars(SQL.trim(TextSampleModel.label), "@")))
+            let matches = try await TextSampleModel.query().filter(normalized == handle).all(on: tx)
+            #expect(
+                matches.map(\.id).sorted() == [canonical.id, spaced.id, prefixed.id, revealedSpace.id, repeatedPrefix.id].sorted())
+        }
+    }
+
+    /// A NULL count, start, length or index makes the result NULL.
+    @Test func nullableNumericStringArgumentsFollowPostgresNullSemantics() async throws {
+        struct NullableNumericStringArgumentResult: Decodable, Equatable {
+            let label: String
+            let leftValue: String?
+            let rightValue: String?
+            let substringValue: String?
+            let repeatedValue: String?
+            let startPadded: String?
+            let endPadded: String?
+            let replacedValue: String?
+            let splitValue: String?
+            let nullableSource: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "empty", body: "")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+            _ = try await seedTextSample(on: tx, label: "normal", body: "xy")
+
+            let count: Expr<Int32?> = SQL.charLength(TextSampleModel.body)
+            let position: Expr<Int32?> = count + 1
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("label"),
+                    SQL.left("abcdef", count).as("left_value"),
+                    SQL.right("abcdef", count).as("right_value"),
+                    SQL.substring("abcdef", position, count).as("substring_value"),
+                    SQL.repeat("ab", count).as("repeated_value"),
+                    SQL.padStart("ab", position, "x").as("start_padded"),
+                    SQL.padEnd("ab", position, "x").as("end_padded"),
+                    SQL.replaceRange("abcdef", "X", position, count).as("replaced_value"),
+                    SQL.splitPart("a,b,c", ",", position).as("split_value"),
+                    SQL.left(TextSampleModel.body, count).as("nullable_source")
+                )
+                .orderBy(TextSampleModel.label.asc)
+                .all(as: NullableNumericStringArgumentResult.self, on: tx)
+            #expect(
+                rows == [
+                    NullableNumericStringArgumentResult(
+                        label: "empty", leftValue: "", rightValue: "", substringValue: "", repeatedValue: "", startPadded: "a",
+                        endPadded: "a", replacedValue: "Xabcdef", splitValue: "a", nullableSource: ""),
+                    NullableNumericStringArgumentResult(
+                        label: "missing", leftValue: nil, rightValue: nil, substringValue: nil, repeatedValue: nil, startPadded: nil,
+                        endPadded: nil, replacedValue: nil, splitValue: nil, nullableSource: nil),
+                    NullableNumericStringArgumentResult(
+                        label: "normal", leftValue: "ab", rightValue: "ef", substringValue: "cd", repeatedValue: "abab",
+                        startPadded: "xab", endPadded: "abx", replacedValue: "abXef", splitValue: "c", nullableSource: "xy"),
+                ])
+
+            let matching = try await TextSampleModel.query()
+                .filter(SQL.left("abcdef", SQL.charLength(TextSampleModel.body)) == "ab")
+                .all(on: tx)
+            #expect(matching.map(\.label) == ["normal"])
+        }
+    }
+
+    @Test func stringExtractionAndSizingPreserveCharactersAndNulls() async throws {
+        struct ExtractionSizingResult: Decodable, Equatable {
+            let label: String
+            let leftValue: String?
+            let rightValue: String?
+            let substringValue: String?
+            let repeatedValue: String?
+            let startPadded: String?
+            let endPadded: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "ascii", body: "abcdef")
+            _ = try await seedTextSample(on: tx, label: "empty", body: "")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+            _ = try await seedTextSample(on: tx, label: "unicode", body: "é🦀界")
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    TextSampleModel.label.as("label"),
+                    SQL.left(TextSampleModel.body, 2).as("left_value"),
+                    SQL.right(TextSampleModel.body, 2).as("right_value"),
+                    SQL.substring(TextSampleModel.body, 2, 3).as("substring_value"),
+                    SQL.repeat(TextSampleModel.body, 2).as("repeated_value"),
+                    SQL.padStart(TextSampleModel.body, 8, "xy").as("start_padded"),
+                    SQL.padEnd(TextSampleModel.body, 8, "xy").as("end_padded")
+                )
+                .orderBy(TextSampleModel.label.asc)
+                .all(as: ExtractionSizingResult.self, on: tx)
+            #expect(
+                rows == [
+                    ExtractionSizingResult(
+                        label: "ascii", leftValue: "ab", rightValue: "ef", substringValue: "bcd", repeatedValue: "abcdefabcdef",
+                        startPadded: "xyabcdef", endPadded: "abcdefxy"),
+                    ExtractionSizingResult(
+                        label: "empty", leftValue: "", rightValue: "", substringValue: "", repeatedValue: "", startPadded: "xyxyxyxy",
+                        endPadded: "xyxyxyxy"),
+                    ExtractionSizingResult(
+                        label: "missing", leftValue: nil, rightValue: nil, substringValue: nil, repeatedValue: nil, startPadded: nil,
+                        endPadded: nil),
+                    ExtractionSizingResult(
+                        label: "unicode", leftValue: "é🦀", rightValue: "🦀界", substringValue: "🦀界", repeatedValue: "é🦀界é🦀界",
+                        startPadded: "xyxyxé🦀界", endPadded: "é🦀界xyxyx"),
+                ])
+        }
+    }
+
+    @Test func stringExtractionAndSizingFollowPostgresBoundarySemantics() async throws {
+        struct StringFunctionBoundaryResult: Decodable {
+            let leftZero: String
+            let leftLong: String
+            let leftNegative: String
+            let rightZero: String
+            let rightLong: String
+            let rightNegative: String
+            let substringOne: String
+            let substringZeroStart: String
+            let substringNegativeStart: String
+            let substringZeroCount: String
+            let substringLongCount: String
+            let repeatZero: String
+            let repeatOne: String
+            let repeatNegative: String
+            let padStartShorter: String
+            let padStartEqual: String
+            let padStartLonger: String
+            let padStartSingleFill: String
+            let padStartEmptyFill: String
+            let padStartNegative: String
+            let padEndShorter: String
+            let padEndEqual: String
+            let padEndLonger: String
+            let padEndSingleFill: String
+            let padEndEmptyFill: String
+            let padEndNegative: String
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "boundary", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.left("abcdef", 0).as("left_zero"),
+                        SQL.left("abcdef", 99).as("left_long"),
+                        SQL.left("abcdef", -2).as("left_negative"),
+                        SQL.right("abcdef", 0).as("right_zero"),
+                        SQL.right("abcdef", 99).as("right_long"),
+                        SQL.right("abcdef", -2).as("right_negative"),
+                        SQL.substring("abcdef", 1, 3).as("substring_one"),
+                        SQL.substring("abcdef", 0, 3).as("substring_zero_start"),
+                        SQL.substring("abcdef", -2, 5).as("substring_negative_start"),
+                        SQL.substring("abcdef", 2, 0).as("substring_zero_count"),
+                        SQL.substring("abcdef", 2, 99).as("substring_long_count"),
+                        SQL.repeat("ab", 0).as("repeat_zero"),
+                        SQL.repeat("ab", 1).as("repeat_one"),
+                        SQL.repeat("ab", -2).as("repeat_negative"),
+                        SQL.padStart("abcdef", 4, "xy").as("pad_start_shorter"),
+                        SQL.padStart("abcdef", 6, "xy").as("pad_start_equal"),
+                        SQL.padStart("abcdef", 9, "xy").as("pad_start_longer"),
+                        SQL.padStart("ab", 5, ".").as("pad_start_single_fill"),
+                        SQL.padStart("abcdef", 9, "").as("pad_start_empty_fill"),
+                        SQL.padStart("abcdef", -1, "xy").as("pad_start_negative"),
+                        SQL.padEnd("abcdef", 4, "xy").as("pad_end_shorter"),
+                        SQL.padEnd("abcdef", 6, "xy").as("pad_end_equal"),
+                        SQL.padEnd("abcdef", 9, "xy").as("pad_end_longer"),
+                        SQL.padEnd("ab", 5, ".").as("pad_end_single_fill"),
+                        SQL.padEnd("abcdef", 9, "").as("pad_end_empty_fill"),
+                        SQL.padEnd("abcdef", -1, "xy").as("pad_end_negative")
+                    )
+                    .first(as: StringFunctionBoundaryResult.self, on: tx))
+
+            #expect(result.leftZero == "")
+            #expect(result.leftLong == "abcdef")
+            #expect(result.leftNegative == "abcd")
+            #expect(result.rightZero == "")
+            #expect(result.rightLong == "abcdef")
+            #expect(result.rightNegative == "cdef")
+            #expect(result.substringOne == "abc")
+            #expect(result.substringZeroStart == "ab")
+            #expect(result.substringNegativeStart == "ab")
+            #expect(result.substringZeroCount == "")
+            #expect(result.substringLongCount == "bcdef")
+            #expect(result.repeatZero == "")
+            #expect(result.repeatOne == "ab")
+            #expect(result.repeatNegative == "")
+            #expect(result.padStartShorter == "abcd")
+            #expect(result.padStartEqual == "abcdef")
+            #expect(result.padStartLonger == "xyxabcdef")
+            #expect(result.padStartSingleFill == "...ab")
+            #expect(result.padStartEmptyFill == "abcdef")
+            #expect(result.padStartNegative == "")
+            #expect(result.padEndShorter == "abcd")
+            #expect(result.padEndEqual == "abcdef")
+            #expect(result.padEndLonger == "abcdefxyx")
+            #expect(result.padEndSingleFill == "ab...")
+            #expect(result.padEndEmptyFill == "abcdef")
+            #expect(result.padEndNegative == "")
+        }
+    }
+
+    /// "Normalization" here is trimming and case conversion, not Unicode normalization.
+    @Test func stringExtractionAndSizingComposeWithNormalizationAndExpressionCounts() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "xxx", body: "  AbCd  ")
+
+            let normalized = SQL.lower(SQL.trim(TextSampleModel.body))
+            let count = SQL.charLength(TextSampleModel.label)
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.left(SQL.trim(TextSampleModel.body), count).as("extracted"),
+                        SQL.padEnd(SQL.substring(normalized, 2, count), 8, SQL.lower("Q%_\\'")).as("padded"),
+                        SQL.repeat(SQL.right(normalized, count), 2).as("repeated")
+                    )
+                    .filter(SQL.left(normalized, 2) == "ab")
+                    .orderBy(SQL.padStart(TextSampleModel.label, 5, "0").asc)
+                    .first(on: tx))
+
+            #expect(result.0 == "AbC")
+            #expect(result.1 == "bcdq%_\\'")
+            #expect(result.2 == "bcdbcd")
+        }
+    }
+
+    @Test func substringRejectsNegativeCount() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "negative", body: "abcdef")
+
+            let error = try await #require(throws: PSQLError.self) {
+                try await TextSampleModel.query().select(SQL.substring(TextSampleModel.body, 1, -1).as("value")).all(on: tx)
+            }
+            #expect(error.serverInfo?[.message] == "negative substring length not allowed")
+        }
+    }
+
+    @Test func titleCaseAndReverseFollowPostgresqlCharacterSemantics() async throws {
+        struct TextCaseAndReverseResult: Decodable {
+            let titleWords: String
+            let titleAlreadyCased: String
+            let titlePunctuation: String
+            let titleDigits: String
+            let titleWhitespace: String
+            let titleUnicodeSeparator: String
+            let titleEmpty: String
+            let reverseASCII: String
+            let reverseUnicode: String
+            let reverseCombiningSequence: String
+            let reverseEmpty: String
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "character-semantics", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.titleCase("hELLO wORLD").as("title_words"),
+                        SQL.titleCase("Already Cased").as("title_already_cased"),
+                        SQL.titleCase("one-two_three.four").as("title_punctuation"),
+                        SQL.titleCase("abc123 42FOO").as("title_digits"),
+                        SQL.titleCase("\theLLo  wORLD\n").as("title_whitespace"),
+                        SQL.titleCase("hello—WORLD").as("title_unicode_separator"),
+                        SQL.titleCase("").as("title_empty"),
+                        SQL.reverse("abcde").as("reverse_ascii"),
+                        SQL.reverse("é🦀界").as("reverse_unicode"),
+                        SQL.reverse("a\u{301}b").as("reverse_combining_sequence"),
+                        SQL.reverse("").as("reverse_empty")
+                    )
+                    .first(as: TextCaseAndReverseResult.self, on: tx))
+
+            #expect(result.titleWords == "Hello World")
+            #expect(result.titleAlreadyCased == "Already Cased")
+            #expect(result.titlePunctuation == "One-Two_Three.Four")
+            #expect(result.titleDigits == "Abc123 42foo")
+            #expect(result.titleWhitespace == "\tHello  World\n")
+            #expect(result.titleUnicodeSeparator == "Hello—World")
+            #expect(result.titleEmpty == "")
+            #expect(result.reverseASCII == "edcba")
+            #expect(result.reverseUnicode == "界🦀é")
+            #expect(result.reverseCombiningSequence == "b\u{301}a")
+            #expect(result.reverseEmpty == "")
+        }
+    }
+
+    @Test func replaceAndTranslateCoverExactMappingSemantics() async throws {
+        struct ReplaceAndTranslateResult: Decodable {
+            let replaceAll: String
+            let replaceNonOverlapping: String
+            let replaceAbsent: String
+            let replaceEmptySource: String
+            let replaceEmptyFrom: String
+            let replaceEmptyTo: String
+            let replaceCaseSensitive: String
+            let replaceUnicode: String
+            let translatePositional: String
+            let translateDeletion: String
+            let translateExtraTo: String
+            let translateRepeatedSource: String
+            let translateUnicode: String
+            let translateEmptyFrom: String
+            let translateEmptyTo: String
+            let translateCaseSensitive: String
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "mapping-semantics", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.replace("abcabc", "bc", "X").as("replace_all"),
+                        SQL.replace("aaaaa", "aa", "b").as("replace_non_overlapping"),
+                        SQL.replace("abc", "z", "X").as("replace_absent"),
+                        SQL.replace("", "a", "X").as("replace_empty_source"),
+                        SQL.replace("abc", "", "X").as("replace_empty_from"),
+                        SQL.replace("banana", "an", "").as("replace_empty_to"),
+                        SQL.replace("AaA", "a", "x").as("replace_case_sensitive"),
+                        SQL.replace("é🦀é", "é", "界").as("replace_unicode"),
+                        SQL.translateChars("12345", "143", "ax").as("translate_positional"),
+                        SQL.translateChars("12345", "143", "a").as("translate_deletion"),
+                        SQL.translateChars("abc", "ab", "XYZ").as("translate_extra_to"),
+                        SQL.translateChars("banana", "an", "12").as("translate_repeated_source"),
+                        SQL.translateChars("é🦀界é", "é界", "ab").as("translate_unicode"),
+                        SQL.translateChars("abc", "", "xyz").as("translate_empty_from"),
+                        SQL.translateChars("banana", "an", "").as("translate_empty_to"),
+                        SQL.translateChars("Aa", "a", "x").as("translate_case_sensitive")
+                    )
+                    .first(as: ReplaceAndTranslateResult.self, on: tx))
+
+            #expect(result.replaceAll == "aXaX")
+            #expect(result.replaceNonOverlapping == "bba")
+            #expect(result.replaceAbsent == "abc")
+            #expect(result.replaceEmptySource == "")
+            #expect(result.replaceEmptyFrom == "abc")
+            #expect(result.replaceEmptyTo == "ba")
+            #expect(result.replaceCaseSensitive == "AxA")
+            #expect(result.replaceUnicode == "界🦀界")
+            #expect(result.translatePositional == "a2x5")
+            #expect(result.translateDeletion == "a25")
+            #expect(result.translateExtraTo == "XYc")
+            #expect(result.translateRepeatedSource == "b12121")
+            #expect(result.translateUnicode == "a🦀ba")
+            #expect(result.translateEmptyFrom == "abc")
+            #expect(result.translateEmptyTo == "b")
+            #expect(result.translateCaseSensitive == "Ax")
+        }
+    }
+
+    @Test func textTransformationsPropagateNullFromEveryStringArgument() async throws {
+        struct NullableTextTransformationResult: Decodable, Equatable {
+            let titleCase: String?
+            let reverse: String?
+            let replaceInput: String?
+            let replaceFrom: String?
+            let replaceTo: String?
+            let rangeInput: String?
+            let rangeReplacement: String?
+            let translateInput: String?
+            let translateFrom: String?
+            let translateTo: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let row = try await seedTextSample(on: tx, label: "nullable", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.titleCase(TextSampleModel.body).as("title_case"),
+                        SQL.reverse(TextSampleModel.body).as("reverse"),
+                        SQL.replace(TextSampleModel.body, "a", "b").as("replace_input"),
+                        SQL.replace(TextSampleModel.label, TextSampleModel.body, "b").as("replace_from"),
+                        SQL.replace(TextSampleModel.label, "a", TextSampleModel.body).as("replace_to"),
+                        SQL.replaceRange(TextSampleModel.body, "x", 1, 1).as("range_input"),
+                        SQL.replaceRange(TextSampleModel.label, TextSampleModel.body, 1, 1).as("range_replacement"),
+                        SQL.translateChars(TextSampleModel.body, "a", "b").as("translate_input"),
+                        SQL.translateChars(TextSampleModel.label, TextSampleModel.body, "b").as("translate_from"),
+                        SQL.translateChars(TextSampleModel.label, "a", TextSampleModel.body).as("translate_to")
+                    )
+                    .filter(TextSampleModel.id == row.id)
+                    .first(as: NullableTextTransformationResult.self, on: tx))
+            #expect(
+                result
+                    == NullableTextTransformationResult(
+                        titleCase: nil, reverse: nil, replaceInput: nil, replaceFrom: nil, replaceTo: nil, rangeInput: nil,
+                        rangeReplacement: nil, translateInput: nil, translateFrom: nil, translateTo: nil))
+        }
+    }
+
+    @Test func nestedTextTransformationsFilterRealPostgresqlRows() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "matched", body: "  hELLO-old  ")
+            _ = try await seedTextSample(on: tx, label: "other", body: "  HELLO-current  ")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+
+            let transformed: Expr<String?> = SQL.reverse(
+                SQL.translateChars(
+                    SQL.replace(
+                        SQL.titleCase(SQL.lower(SQL.trim(TextSampleModel.body))),
+                        SQL.titleCase("OLD"),
+                        SQL.reverse("wen")
+                    ),
+                    SQL.lower("E"),
+                    SQL.upper("x")
+                ))
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(TextSampleModel.label.as("label"), transformed.as("transformed"))
+                    .filter(transformed == "wXn-ollXH")
+                    .first(on: tx))
+            #expect(result.0 == "matched")
+            #expect(result.1 == "wXn-ollXH")
+        }
+    }
+
+    @Test func replaceRangeFollowsPostgresqlOverlayBoundaries() async throws {
+        struct ReplaceRangeBoundaryResult: Decodable {
+            let shorter: String
+            let equal: String
+            let longer: String
+            let startOne: String
+            let startBeyondEnd: String
+            let zeroCount: String
+            let negativeCount: String
+            let oversizedCount: String
+            let emptySource: String
+            let emptyReplacement: String
+            let unicode: String
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "overlay-boundaries", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.replaceRange("abcdef", "X", 3, 2).as("shorter"),
+                        SQL.replaceRange("abcdef", "XY", 3, 2).as("equal"),
+                        SQL.replaceRange("abcdef", "WXYZ", 3, 2).as("longer"),
+                        SQL.replaceRange("abcdef", "X", 1, 2).as("start_one"),
+                        SQL.replaceRange("abcdef", "X", 8, 2).as("start_beyond_end"),
+                        SQL.replaceRange("abcdef", "X", 3, 0).as("zero_count"),
+                        SQL.replaceRange("abcdef", "X", 3, -1).as("negative_count"),
+                        SQL.replaceRange("abcdef", "X", 3, 99).as("oversized_count"),
+                        SQL.replaceRange("", "X", 1, 0).as("empty_source"),
+                        SQL.replaceRange("abcdef", "", 3, 2).as("empty_replacement"),
+                        SQL.replaceRange("a🦀界b", "é", 2, 2).as("unicode")
+                    )
+                    .first(as: ReplaceRangeBoundaryResult.self, on: tx))
+
+            #expect(result.shorter == "abXef")
+            #expect(result.equal == "abXYef")
+            #expect(result.longer == "abWXYZef")
+            #expect(result.startOne == "Xcdef")
+            #expect(result.startBeyondEnd == "abcdefX")
+            #expect(result.zeroCount == "abXcdef")
+            #expect(result.negativeCount == "abXbcdef")
+            #expect(result.oversizedCount == "abX")
+            #expect(result.emptySource == "X")
+            #expect(result.emptyReplacement == "abef")
+            #expect(result.unicode == "aéb")
+        }
+    }
+
+    @Test func textTransformationMetacharactersRemainBoundValues() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "bind-safety", body: nil)
+
+            let unsafeText = "'%_\\[]().*+"
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.replace(unsafeText, "%_\\", "safe").as("replaced"),
+                        SQL.replaceRange(unsafeText, "safe", 2, 3).as("ranged"),
+                        SQL.translateChars(unsafeText, "'\\", "QB").as("translated")
+                    )
+                    .first(on: tx))
+            #expect(result.0 == "'safe[]().*+")
+            #expect(result.1 == "'safe[]().*+")
+            #expect(result.2 == "Q%_B[]().*+")
+        }
+    }
+
+    /// PostgreSQL reports a start below 1 as a negative substring length.
+    @Test func replaceRangeRejectsZeroStart() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "invalid-overlay-start", body: nil)
+
+            let error = try await #require(throws: PSQLError.self) {
+                try await TextSampleModel.query().select(SQL.replaceRange("abcdef", "X", 0, 2).as("value")).all(on: tx)
+            }
+            #expect(error.serverInfo?[.message] == "negative substring length not allowed")
+        }
+    }
+
+    /// rust-dbkit passes the values as an array; here they are arguments.
+    @Test func concatFunctionsFollowPostgresNullEmptyAndUnicodeSemantics() async throws {
+        struct StringCompositionResult: Decodable, Equatable {
+            let joined: String
+            let separated: String
+            let emptySeparator: String
+            let nullableSeparator: String?
+            let single: String
+            let singleSeparated: String
+            let noValues: String
+            let noSeparatedValues: String
+            let noValuesNullableSeparator: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let rows: [(String?, String?, String?)] = [("é", nil, "界"), (nil, nil, nil), ("", "", ""), ("A", "B", nil)]
+            for (email, backupEmail, region) in rows {
+                _ = try await seedFuncRow(
+                    on: tx, email: email, backupEmail: backupEmail, region: region, startsAt: Date(timeIntervalSince1970: 0))
+            }
+
+            let results = try await FuncRowModel.query()
+                .select(
+                    SQL.concat(FuncRowModel.email, FuncRowModel.backupEmail, FuncRowModel.region).as("joined"),
+                    SQL.concatWithSeparator("|", FuncRowModel.email, FuncRowModel.backupEmail, FuncRowModel.region).as("separated"),
+                    SQL.concatWithSeparator("", FuncRowModel.email, FuncRowModel.backupEmail, FuncRowModel.region).as("empty_separator"),
+                    SQL.concatWithSeparator(FuncRowModel.region, FuncRowModel.email, FuncRowModel.backupEmail).as("nullable_separator"),
+                    SQL.concat(FuncRowModel.email).as("single"),
+                    SQL.concatWithSeparator("|", FuncRowModel.email).as("single_separated"),
+                    SQL.concat().as("no_values"),
+                    SQL.concatWithSeparator("|").as("no_separated_values"),
+                    SQL.concatWithSeparator(FuncRowModel.region).as("no_values_nullable_separator")
+                )
+                .orderBy(FuncRowModel.id.asc)
+                .all(as: StringCompositionResult.self, on: tx)
+            #expect(
+                results == [
+                    StringCompositionResult(
+                        joined: "é界", separated: "é|界", emptySeparator: "é界", nullableSeparator: "é", single: "é",
+                        singleSeparated: "é", noValues: "", noSeparatedValues: "", noValuesNullableSeparator: ""),
+                    StringCompositionResult(
+                        joined: "", separated: "", emptySeparator: "", nullableSeparator: nil, single: "", singleSeparated: "",
+                        noValues: "", noSeparatedValues: "", noValuesNullableSeparator: nil),
+                    StringCompositionResult(
+                        joined: "", separated: "||", emptySeparator: "", nullableSeparator: "", single: "", singleSeparated: "",
+                        noValues: "", noSeparatedValues: "", noValuesNullableSeparator: ""),
+                    StringCompositionResult(
+                        joined: "AB", separated: "A|B", emptySeparator: "AB", nullableSeparator: nil, single: "A",
+                        singleSeparated: "A", noValues: "", noSeparatedValues: "", noValuesNullableSeparator: nil),
+                ])
+        }
+    }
+
+    /// rust-dbkit's macros take a bracketed list; here the values are arguments. Swift has no counterpart for its
+    /// dynamically built lists, the `dynamic_joined` and `dynamic_separated` columns.
+    @Test func concatMacrosSupportRequiredNullableDynamicAndEmptyValues() async throws {
+        struct MixedModelColumnConcatResult: Decodable, Equatable {
+            let joined: String
+            let separated: String
+            let nullableSeparator: String?
+            let emptyJoined: String
+            let emptySeparated: String
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "required", body: "optional")
+            _ = try await seedTextSample(on: tx, label: "required", body: nil)
+
+            let rows = try await TextSampleModel.query()
+                .select(
+                    SQL.concat(TextSampleModel.label, TextSampleModel.body).as("joined"),
+                    SQL.concatWithSeparator("|", TextSampleModel.label, TextSampleModel.body).as("separated"),
+                    SQL.concatWithSeparator(TextSampleModel.body, TextSampleModel.label, "suffix").as("nullable_separator"),
+                    SQL.concat().as("empty_joined"),
+                    SQL.concatWithSeparator("|").as("empty_separated")
+                )
+                .orderBy(TextSampleModel.id.asc)
+                .all(as: MixedModelColumnConcatResult.self, on: tx)
+            #expect(
+                rows == [
+                    MixedModelColumnConcatResult(
+                        joined: "requiredoptional", separated: "required|optional", nullableSeparator: "requiredoptionalsuffix",
+                        emptyJoined: "", emptySeparated: ""),
+                    MixedModelColumnConcatResult(
+                        joined: "required", separated: "required", nullableSeparator: nil, emptyJoined: "", emptySeparated: ""),
+                ])
+        }
+    }
+
+    /// A NULL delimiter splits into characters, so only the source makes the result NULL.
+    @Test func splitFollowsPostgresArrayAndNullSemantics() async throws {
+        struct SplitResult: Decodable {
+            let normal: [String]
+            let repeated: [String]
+            let absent: [String]
+            let emptySource: [String]
+            let emptyDelimiter: [String]
+            let unicode: [String]
+            let nullDelimiter: [String]
+            let nullSource: [String]?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "boundary", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.split("alpha::beta::gamma", "::").as("normal"),
+                        SQL.split("a::::c::", "::").as("repeated"),
+                        SQL.split("abc", ",").as("absent"),
+                        SQL.split("", ",").as("empty_source"),
+                        SQL.split("abc", "").as("empty_delimiter"),
+                        SQL.split("é🙂界🙂ß", "🙂").as("unicode"),
+                        SQL.split("é🙂", TextSampleModel.body).as("null_delimiter"),
+                        SQL.split(TextSampleModel.body, ",").as("null_source")
+                    )
+                    .first(as: SplitResult.self, on: tx))
+
+            #expect(result.normal == ["alpha", "beta", "gamma"])
+            #expect(result.repeated == ["a", "", "c", ""])
+            #expect(result.absent == ["abc"])
+            #expect(result.emptySource.isEmpty)
+            #expect(result.emptyDelimiter == ["abc"])
+            #expect(result.unicode == ["é", "界", "ß"])
+            #expect(result.nullDelimiter == ["é", "🙂"])
+            #expect(result.nullSource == nil)
+        }
+    }
+
+    @Test func splitPartFollowsPostgresIndexFieldAndNullSemantics() async throws {
+        struct SplitPartResult: Decodable {
+            let normal: String
+            let negative: String
+            let outOfRange: String
+            let emptyDelimiterFirst: String
+            let emptyDelimiterSecond: String
+            let repeatedDelimiter: String
+            let leadingEmpty: String
+            let trailingEmpty: String
+            let unicode: String
+            let expressionIndex: String
+            let nullSource: String?
+            let nullDelimiter: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "boundary", body: nil)
+
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.splitPart("alpha::beta::gamma", "::", 2).as("normal"),
+                        SQL.splitPart("a,b,c,d", ",", -2).as("negative"),
+                        SQL.splitPart("a,b", ",", 3).as("out_of_range"),
+                        SQL.splitPart("abc", "", 1).as("empty_delimiter_first"),
+                        SQL.splitPart("abc", "", 2).as("empty_delimiter_second"),
+                        SQL.splitPart("a,,c", ",", 2).as("repeated_delimiter"),
+                        SQL.splitPart(",a", ",", 1).as("leading_empty"),
+                        SQL.splitPart("a,", ",", -1).as("trailing_empty"),
+                        SQL.splitPart("é🙂界🙂ß", "🙂", -2).as("unicode"),
+                        SQL.splitPart("é🙂界", "🙂", SQL.charLength("x")).as("expression_index"),
+                        SQL.splitPart(TextSampleModel.body, ",", 1).as("null_source"),
+                        SQL.splitPart("abc", TextSampleModel.body, 1).as("null_delimiter")
+                    )
+                    .first(as: SplitPartResult.self, on: tx))
+
+            #expect(result.normal == "beta")
+            #expect(result.negative == "c")
+            #expect(result.outOfRange == "")
+            #expect(result.emptyDelimiterFirst == "abc")
+            #expect(result.emptyDelimiterSecond == "")
+            #expect(result.repeatedDelimiter == "")
+            #expect(result.leadingEmpty == "")
+            #expect(result.trailingEmpty == "")
+            #expect(result.unicode == "界")
+            #expect(result.expressionIndex == "é")
+            #expect(result.nullSource == nil)
+            #expect(result.nullDelimiter == nil)
+        }
+    }
+
+    @Test func splitPartRejectsZeroIndex() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "zero", body: nil)
+
+            let error = try await #require(throws: PSQLError.self) {
+                try await TextSampleModel.query().select(SQL.splitPart(TextSampleModel.label, ",", 0).as("value")).all(on: tx)
+            }
+            #expect(error.serverInfo?[.message] == "field position must not be zero")
+        }
+    }
+
+    @Test func compositionAndSplitArgumentsRemainBoundValues() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedTextSample(on: tx, label: "bound", body: nil)
+
+            let unsafeText = "'%_\\.*+?[](){}^$|"
+            let source = "left\(unsafeText)right"
+            let result = try #require(
+                try await TextSampleModel.query()
+                    .select(
+                        SQL.concat(unsafeText, SQL.lower("TAIL")).as("joined"),
+                        SQL.concatWithSeparator(unsafeText, "left", "right").as("separated"),
+                        SQL.split(source, unsafeText).as("parts"),
+                        SQL.splitPart(source, unsafeText, 2).as("second_part")
+                    )
+                    .first(on: tx))
+            #expect(result.0 == "\(unsafeText)tail")
+            #expect(result.1 == "left\(unsafeText)right")
+            #expect(result.2 == ["left", "right"])
+            #expect(result.3 == "right")
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.

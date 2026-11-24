@@ -335,6 +335,36 @@ class LeaseModel {
         #expect(rendered.binds.map(\.description) == ["", "0", "100", "10"])
     }
 
+    /// Text functions work in `update().set`, `GROUP BY` and `HAVING`, take aggregates, and nest in the other functions.
+    @Test func textFunctionsInEveryClause() {
+        let update = UserModel.update()
+            .set(UserModel.name, to: SQL.concatWithSeparator(" ", SQL.titleCase(UserModel.name), SQL.left(UserModel.email, 3)))
+            .set(UserModel.region, to: SQL.trimEndChars(UserModel.region, "!"))
+            .filter(SQL.position(UserModel.email, "@") > 1)
+            .render()
+        #expect(
+            update.sql
+                == #"UPDATE "users" SET "name" = CONCAT_WS($1, INITCAP("users"."name"), LEFT("users"."email", $2)), "region" = TRIM(TRAILING $3 FROM "users"."region") WHERE STRPOS("users"."email", $4) > $5"#
+        )
+        #expect(update.binds.map(\.description) == [" ", "3", "!", "@", "1"])
+
+        let grouped: Projection<String, String, Int32> = SaleModel.query()
+            .select(
+                SQL.splitPart(SQL.reverse(SaleModel.region), "-", 1).as("suffix"),
+                SQL.concat(SQL.min(SaleModel.region), ":", SQL.max(SaleModel.region)).as("span"),
+                SQL.greatest(SQL.charLength(SQL.max(SaleModel.region)), 0).as("longest")
+            )
+            .groupBy(SQL.reverse(SaleModel.region))
+            .having(SQL.reverse(SQL.max(SaleModel.region)).hasPrefix("su"))
+            .orderBy(SQL.padStart(SQL.min(SaleModel.region) ?? "", 8, "0").uppercased().asc)
+        let rendered = grouped.render()
+        #expect(
+            rendered.sql
+                == #"SELECT SPLIT_PART(REVERSE("sales"."region"), $1, $2) AS "suffix", CONCAT(MIN("sales"."region"), $3, MAX("sales"."region")) AS "span", GREATEST(CHAR_LENGTH(MAX("sales"."region")), $4) AS "longest" FROM "sales" GROUP BY REVERSE("sales"."region") HAVING STARTS_WITH(REVERSE(MAX("sales"."region")), $5) ORDER BY UPPER(LPAD(COALESCE(MIN("sales"."region"), $6), $7, $8)) ASC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["-", "1", ":", "0", "su", "", "8", "0"])
+    }
+
     /// `groupBy` takes several expressions, `having` predicates combine with `AND`, and aggregates take computed values.
     /// `SQL.countAll()` counts rows.
     @Test func groupingByExpressionsAndAggregatingComputedValues() {

@@ -451,7 +451,16 @@ class ValueRowModel {
                 .first(on: tx)
             #expect(summary?.0 == 3 && summary?.1 == 2 && summary?.2 == 10)
 
-            // Waits for slice 16: the string functions on `sales`.
+            let text = try await SaleModel.query()
+                .select(
+                    SQL.concatWithSeparator("-", SaleModel.region, "x"),
+                    SQL.splitPart("a,b,c", ",", 2),
+                    SaleModel.region.uppercased()
+                )
+                .filter(SaleModel.region == "us")
+                .first(on: tx)
+            #expect(text?.0 == "us-x" && text?.1 == "b" && text?.2 == "US")
+            // Waits for slice 16b: `SQL.regexReplace(SaleModel.region, "u", "U", .global)` in the text query, which gives "Us".
             // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update,
             // `SQL.row(TaskModel.state, TaskModel.title).in(…)` over the enum column, and `deliveries`.
         }
