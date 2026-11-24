@@ -34,7 +34,8 @@ The update filters by the key the row was loaded with, so assigning a key column
 nothing assigned, `update(on:)` sends no query and returns the row unchanged. When no row matches the key, it throws
 `DBKitError.rowNotFound`.
 
-Use the update builder for bulk or conditional updates. `set(_:to:)` takes a value of the column's type:
+Use the update builder for bulk or conditional updates. `set(_:to:)` takes a value of the column's type or an
+expression:
 
 ```swift
 @Model(table: "jobs")
@@ -49,7 +50,7 @@ class JobModel {
 ```swift
 let retried = try await JobModel.update()
     .set(JobModel.state, to: "queued")
-    .set(JobModel.attempts, to: 0)
+    .set(JobModel.attempts, to: JobModel.attempts + 1)
     .filter(JobModel.state == "failed")
     .returningAll()
     .all(on: db)

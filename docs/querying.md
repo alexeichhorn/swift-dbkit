@@ -33,7 +33,7 @@ let rows = try await todos.all(on: db)
 ```
 
 Comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=` against a value or [another
-expression](#column-to-column-comparisons). Other predicates: `.in([...])`, `.notIn([...])`, `.between(a, b)`,
+expression](#column-to-column-comparisons). Other predicates: `.in([...])`, `.notIn([...])`, `.between(a, b)` with values or expressions as bounds,
 `.isNull`, `.isNotNull`, `.like`, `.ilike`, `.isDistinct(from:)`, `.isNotDistinct(from:)`. `in` with an empty array
 matches nothing, `notIn` with an empty array matches everything. On a nullable column a predicate is `Expr<Bool?>` and
 takes optional values; see [Nullability](expressions.md#nullability).
