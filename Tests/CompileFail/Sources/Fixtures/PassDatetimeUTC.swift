@@ -18,7 +18,7 @@ private func useUTCDates() {
     _ = EventTzModel.query()
         .filter(EventTzModel.startsAt == startsAt)
         .filter(EventTzModel.startsAt.between(startsAt, endsAt))
-    // Waits for slice 8: `.filter(EventTzModel.endsAt == nil)` on that query.
+        .filter(EventTzModel.endsAt == nil)
 
     _ = EventTzModel.insert(EventTzModel.Insert(id: nilUUID, title: "TZ", startsAt: startsAt, endsAt: endsAt))
 

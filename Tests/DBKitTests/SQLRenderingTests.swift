@@ -2,21 +2,51 @@ import DBKit
 import Testing
 
 @Suite struct SQLRenderingTests {
-    @Test func filtersAndOrdering() {
+    @Test func filtersOrderingAndNullHandling() {
         let userID: Int64 = 7
-        // Waits for slice 8: the kit's `filtersOrderingAndNullHandling`, which adds `TodoModel.note == nil` and an optional `String?` value to these filters.
+        let note: String? = nil
         let rendered = TodoModel.query()
-            .filter(TodoModel.userID == userID)
-            .filter(TodoModel.title.ilike("%milk%"))
+            .filter(TodoModel.userID == userID && TodoModel.note == nil)
+            .filter(TodoModel.note == note || TodoModel.title.ilike("%milk%"))
             .orderBy(TodoModel.id.desc)
             .limit(20)
             .offset(40)
             .render()
         #expect(
             rendered.sql
-                == #"SELECT "todos".* FROM "todos" WHERE "todos"."user_id" = $1 AND "todos"."title" ILIKE $2 ORDER BY "todos"."id" DESC LIMIT 20 OFFSET 40"#
+                == #"SELECT "todos".* FROM "todos" WHERE ("todos"."user_id" = $1 AND "todos"."note" IS NULL) AND ("todos"."note" IS NULL OR "todos"."title" ILIKE $2) ORDER BY "todos"."id" DESC LIMIT 20 OFFSET 40"#
         )
         #expect(rendered.binds.map(\.description) == ["7", "%milk%"])
+    }
+
+    /// A comparison on a nullable column is `Expr<Bool?>`, and queries, updates and deletes filter by it.
+    @Test func nullableComparisonsFilterQueriesUpdatesAndDeletes() {
+        let isToday: Expr<Bool?> = TodoModel.note == "today"
+        let isOpen: Expr<Bool> = !TodoModel.isComplete
+        let todayOrOpen: Expr<Bool?> = isToday || isOpen
+        let notToday: Expr<Bool?> = !isToday
+
+        let query = TodoModel.query().filter(todayOrOpen).render()
+        #expect(query.sql == #"SELECT "todos".* FROM "todos" WHERE ("todos"."note" = $1 OR NOT ("todos"."is_complete"))"#)
+        #expect(query.binds.map(\.description) == ["today"])
+        let update = TodoModel.update().set(TodoModel.note, to: nil).filter(isToday).render()
+        #expect(update.sql == #"UPDATE "todos" SET "note" = NULL WHERE "todos"."note" = $1"#)
+        #expect(update.binds.map(\.description) == ["today"])
+        let delete = TodoModel.delete().filter(notToday).render()
+        #expect(delete.sql == #"DELETE FROM "todos" WHERE NOT ("todos"."note" = $1)"#)
+        #expect(delete.binds.map(\.description) == ["today"])
+        // Waits for slice 14: `select(TodoModel.note == "today")` decodes as `Bool?`, `nil` for a row whose note is NULL.
+    }
+
+    @Test func nullChecksAndFallbacks() {
+        let checked: Expr<Bool> = TodoModel.note.isNull || TodoModel.note.isNotNull
+        let fallback: Expr<String> = TodoModel.note ?? TodoModel.title
+        let rendered = TodoModel.query().filter(checked).filter(fallback == "milk").render()
+        #expect(
+            rendered.sql
+                == #"SELECT "todos".* FROM "todos" WHERE ("todos"."note" IS NULL OR "todos"."note" IS NOT NULL) AND COALESCE("todos"."note", "todos"."title") = $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["milk"])
     }
 
     @Test func comparisonsLogicListsAndDistinct() {

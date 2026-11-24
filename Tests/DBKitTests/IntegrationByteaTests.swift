@@ -21,7 +21,9 @@ import Testing
             active.dataOptional = nil
             let cleared = try await active.update(on: tx)
             #expect(cleared.dataOptional == nil)
-            // Waits for slice 8: `filter(BlobRowModel.dataOptional == nil)` finds exactly this row.
+
+            let onlyNullOptional = try await BlobRowModel.query().filter(BlobRowModel.dataOptional == nil).all(on: tx)
+            #expect(onlyNullOptional.map(\.id) == [inserted.id])
         }
     }
 }

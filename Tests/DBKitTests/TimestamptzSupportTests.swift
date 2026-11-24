@@ -38,7 +38,8 @@ import Testing
 
             let inserted = try await seedEventTz(on: tx, id, title: "Nullable end", startsAt: startsAt, endsAt: nil)
             #expect(inserted.endsAt == nil)
-            // Waits for slice 8: `filter(EventTzModel.endsAt == nil)` finds exactly this row.
+            let pending = try await EventTzModel.query().filter(EventTzModel.endsAt == nil).all(on: tx)
+            #expect(pending.map(\.id) == [id])
 
             let finishedAt = startsAt + 6 * 3600
             let rescheduledStart = startsAt + 2 * 3600

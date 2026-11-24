@@ -503,6 +503,70 @@ import Testing
             #expect(fetched.data == updatedPayload)
         }
     }
+
+    /// rust-dbkit's borrowed values are plain `String?` constants here; Swift doesn't distinguish owned and borrowed.
+    @Test func insertUpdateAndFilterNulls() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let inserted = try await seedNullableRow(on: tx, note: nil)
+            #expect(inserted.note == nil)
+
+            let someRow = try await seedNullableRow(on: tx, note: "hello")
+            #expect(someRow.note == "hello")
+
+            func setNote(_ note: String?) async throws -> [NullableRowModel] {
+                try await NullableRowModel.update()
+                    .set(NullableRowModel.note, to: note)
+                    .filter(NullableRowModel.id == someRow.id)
+                    .returningAll()
+                    .all(on: tx)
+            }
+
+            var updated = try await NullableRowModel.update()
+                .set(NullableRowModel.note, to: "direct")
+                .filter(NullableRowModel.id == someRow.id)
+                .returningAll()
+                .all(on: tx)
+            #expect(updated.first?.note == "direct")
+
+            let optional: String? = "optional"
+            updated = try await setNote(optional)
+            #expect(updated.first?.note == "optional")
+
+            let directMatch = try #require(try await NullableRowModel.query().filter(NullableRowModel.note == "optional").first(on: tx))
+            #expect(directMatch.id == someRow.id)
+
+            let optionalMatch = try #require(try await NullableRowModel.query().filter(NullableRowModel.note == optional).first(on: tx))
+            #expect(optionalMatch.id == someRow.id)
+
+            let borrowedOptional: String? = "borrowed"
+            updated = try await setNote(borrowedOptional)
+            #expect(updated.first?.note == "borrowed")
+
+            let borrowedMatch = try #require(
+                try await NullableRowModel.query().filter(NullableRowModel.note == borrowedOptional).first(on: tx))
+            #expect(borrowedMatch.id == someRow.id)
+
+            let borrowedNone: String? = nil
+            updated = try await setNote(borrowedNone)
+            #expect(updated.first?.note == nil)
+
+            let borrowedNullMatch = try await NullableRowModel.query().filter(NullableRowModel.note == borrowedNone).all(on: tx)
+            #expect(borrowedNullMatch.count == 2)
+
+            updated = try await NullableRowModel.update()
+                .set(NullableRowModel.note, to: nil)
+                .filter(NullableRowModel.id == someRow.id)
+                .returningAll()
+                .all(on: tx)
+            #expect(updated.count == 1)
+            #expect(updated.first?.note == nil)
+
+            let nullRows = try await NullableRowModel.query().filter(NullableRowModel.note == nil).all(on: tx)
+            #expect(nullRows.count == 2)
+            #expect(nullRows.allSatisfy { $0.note == nil })
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.
@@ -527,6 +591,10 @@ private func setupSchema(on tx: Transaction) async throws {
 
 private func seedUser(on tx: Transaction, name: String, email: String) async throws -> UserModel {
     try #require(try await UserModel.insert(UserModel.Insert(name: name, email: email)).returningAll().first(on: tx))
+}
+
+private func seedNullableRow(on tx: Transaction, note: String?) async throws -> NullableRowModel {
+    try #require(try await NullableRowModel.insert(NullableRowModel.Insert(note: note)).returningAll().first(on: tx))
 }
 
 private func seedOrderLine(on tx: Transaction, _ orderID: Int64, _ lineID: Int64, note: String) async throws -> OrderLineModel {

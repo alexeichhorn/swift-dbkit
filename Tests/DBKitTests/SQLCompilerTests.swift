@@ -31,6 +31,63 @@ class CompilerUserModel {
         #expect(rendered.binds.map(\.description) == ["1", "2", "3"])
     }
 
+    @Test func compilesIsNullExpression() {
+        let predicate: Expr<Bool> = CompilerUserModel.email.isNull
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."email" IS NULL"#)
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func compilesEqNoneAsIsNull() {
+        let predicate: Expr<Bool?> = CompilerUserModel.email == nil
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."email" IS NULL"#)
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func compilesEqSomeOnNullableColumnAsBoundValue() {
+        let email: String? = "a@b.com"
+        let predicate: Expr<Bool?> = CompilerUserModel.email == email
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."email" = $1"#)
+        #expect(rendered.binds.map(\.description) == ["a@b.com"])
+    }
+
+    @Test func compilesNeNoneAsIsNotNull() {
+        let predicate: Expr<Bool?> = CompilerUserModel.email != nil
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."email" IS NOT NULL"#)
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func compilesNullableOrderedComparisonsWithOptionalValues() {
+        let five: Int64? = 5
+        let some: Expr<Bool?> = CompilerUserModel.score < five
+        let someRendered = CompilerUserModel.query().filter(some).render()
+        #expect(someRendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."score" < $1"#)
+        #expect(someRendered.binds.map(\.description) == ["5"])
+
+        let missing: Int64? = nil
+        let none: Expr<Bool?> = CompilerUserModel.score >= missing
+        let noneRendered = CompilerUserModel.query().filter(none).render()
+        #expect(noneRendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."score" >= NULL"#)
+        #expect(noneRendered.binds.isEmpty)
+    }
+
+    @Test func compilesCoalesceFunctionFilter() {
+        let predicate: Expr<Bool> = (CompilerUserModel.email ?? "unknown") == "ALPHA"
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE COALESCE("users"."email", $1) = $2"#)
+        #expect(rendered.binds.map(\.description) == ["unknown", "ALPHA"])
+    }
+
+    @Test func compilesCoalesceTwoColumns() {
+        let predicate: Expr<Bool?> = (CompilerUserModel.email ?? CompilerUserModel.backupEmail) == "alpha@db.com"
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE COALESCE("users"."email", "users"."backup_email") = $1"#)
+        #expect(rendered.binds.map(\.description) == ["alpha@db.com"])
+    }
+
     @Test func compilesSelectQuery() {
         let rendered = CompilerUserModel.query()
             .filter(CompilerUserModel.email.like("%example%"))

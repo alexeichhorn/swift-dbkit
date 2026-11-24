@@ -43,11 +43,12 @@ private let nilUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
         let low = isoDate("2024-01-02T03:00:00Z")
         let high = low + 30 * 60
 
-        // Waits for slice 8: `.filter(NullableStartEventModel.startsAt == nil)` before the `between`, rendering `IS NULL`.
         let rendered = NullableStartEventModel.query()
+            .filter(NullableStartEventModel.startsAt == nil)
             .filter(NullableStartEventModel.startsAt.between(low, high))
             .render()
 
+        #expect(rendered.sql.contains("IS NULL"))
         #expect(rendered.sql.contains(#""events_tz"."starts_at" BETWEEN $1 AND $2"#))
         try #require(rendered.binds.count == 2)
         #expect(rendered.binds[0].value as? Date == low)

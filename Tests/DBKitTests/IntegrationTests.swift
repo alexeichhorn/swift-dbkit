@@ -236,7 +236,8 @@ class ValueRowModel {
             let saved = try await draft.save(on: tx)
             #expect(saved.id > 0)
 
-            // Waits for slice 8: `update().set(UserModel.region, to: nil).filter(UserModel.region == "us").execute(on:) == 1`.
+            let renamed = try await UserModel.update().set(UserModel.region, to: nil).filter(UserModel.region == "us").execute(on: tx)
+            #expect(renamed == 1)
             #expect(try await saved.delete(on: tx) == 1)
             // Waits for slice 23: `count(on:) == 2`, `exists(on:)` for beta, `paginate(page: 2, perPage: 1, on:)`.
             // Waits for slice 25: `stream(on:)` yields "Alpha 2" and "Beta".
@@ -285,6 +286,8 @@ class ValueRowModel {
             .execute(on: tx)
             let row = try #require(try await HintModel.query().filter(HintModel.note == "target").first(on: tx))
             #expect(row.name == "a" && row.region == nil)
+            let nullRegion = try await HintModel.query().filter(HintModel.name == "a").filter(HintModel.region == nil).all(on: tx)
+            #expect(nullRegion.map(\.note) == ["target"])
 
             var active = row.active()
             active.note = "changed"

@@ -23,7 +23,11 @@ class MutationUserModel {
         #expect(rendered.binds.map(\.description) == ["a@b.com"])
     }
 
-    // Waits for slice 8: `compilesInsertWithNull`, `Insert(email: nil)` rendering `VALUES (NULL)` without binds.
+    @Test func compilesInsertWithNull() {
+        let rendered = MutationEmailUserModel.insert(MutationEmailUserModel.Insert(email: nil)).returningAll().render()
+        #expect(rendered.sql == #"INSERT INTO "users" ("email") VALUES (NULL) RETURNING *"#)
+        #expect(rendered.binds.isEmpty)
+    }
 
     @Test func compilesInsertWithSomeForNullableColumn() {
         let email: String? = "a@b.com"
@@ -144,7 +148,15 @@ class MutationUserModel {
         #expect(rendered.binds.map(\.description) == ["Updated", "1", "2"])
     }
 
-    // Waits for slice 8: `compilesUpdateSetNull`, `.set(email, to: nil)` rendering `SET "email" = NULL`.
+    @Test func compilesUpdateSetNull() {
+        let rendered = MutationUserModel.update()
+            .set(MutationUserModel.email, to: nil)
+            .filter(MutationUserModel.id == 1)
+            .returningAll()
+            .render()
+        #expect(rendered.sql == #"UPDATE "users" SET "email" = NULL WHERE "users"."id" = $1 RETURNING *"#)
+        #expect(rendered.binds.map(\.description) == ["1"])
+    }
 
     @Test func compilesUpdateSetSomeForNullableColumn() {
         let email: String? = "new@b.com"
