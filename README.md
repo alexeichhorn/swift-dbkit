@@ -95,6 +95,7 @@ Use the `update()` / `delete()` builders for bulk or conditional mutations.
 - [Querying](docs/querying.md)
 - [Mutations](docs/mutations.md)
 - [Expressions and aggregation](docs/expressions.md)
+- [PostgreSQL string functions](docs/string-functions.md)
 - [Postgres types](docs/postgres-types.md)
 - [Database](docs/database.md)
 
