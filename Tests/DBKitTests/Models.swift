@@ -56,6 +56,35 @@ class SaleModel {
     var createdAt: Date
 }
 
+/// The kit's `tasks`. Waits for slice 26: `var state: TaskState` and `var previousState: TaskState?`. Waits for slice
+/// 28: `@DatabaseDefault var updatedAt: Date`.
+@Model(table: "tasks")
+class TaskModel {
+    @Key @AutoIncrement var id: Int64
+    var projectID: Int64
+    var title: String
+    var attempts: Int32 = 0
+}
+
+/// rust-dbkit's `records` of `arithmetic_support.rs` and `arithmetic_integration.rs`.
+@Model(table: "records")
+class RecordModel {
+    @Key @AutoIncrement var id: Int64
+    var leftValue: Int32
+    var rightValue: Int32
+    var realValue: Float
+    var baselineValue: Int32
+    var occurredAt: Date
+}
+
+/// rust-dbkit's `compact_records`: two `smallint` columns.
+@Model(table: "compact_records")
+class CompactRecordModel {
+    @Key @AutoIncrement var id: Int64
+    var leftUnits: Int16
+    var rightUnits: Int16
+}
+
 struct Preferences: Codable, Hashable, DatabaseJSON {
     var theme: String
 }

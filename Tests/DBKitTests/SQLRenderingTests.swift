@@ -1,5 +1,17 @@
 import DBKit
+import Foundation
 import Testing
+
+/// Numeric columns of each kind for the arithmetic rendering test.
+@Model(table: "prices")
+class PriceModel {
+    @Key @AutoIncrement var id: Int64
+    var quantity: Int32
+    var minimum: Int32?
+    var amount: Decimal
+    var discount: Decimal?
+    var rate: Double
+}
 
 @Suite struct SQLRenderingTests {
     @Test func filtersOrderingAndNullHandling() {
@@ -79,7 +91,10 @@ import Testing
         #expect(rendered.binds.isEmpty)
         // Waits for slice 13: `SQL.row(TaskModel.state, TaskModel.title).in([(.pendingReview, "alpha"), (.completed, "beta")])`.
         // Waits for slice 26: `TaskModel.state.in([.inProgress])` and `TaskModel.previousState.isDistinct(from: TaskModel.state)`.
-        // Waits for slice 10: `TaskModel.attempts + 1 < TaskModel.attempts * 2`, rendered `("tasks"."attempts" + $6) < ("tasks"."attempts" * $7)`.
+
+        let arithmetic = TaskModel.query().filter(TaskModel.attempts + 1 < TaskModel.attempts * 2).render()
+        #expect(arithmetic.sql == #"SELECT "tasks".* FROM "tasks" WHERE ("tasks"."attempts" + $1) < ("tasks"."attempts" * $2)"#)
+        #expect(arithmetic.binds.map(\.description) == ["1", "2"])
     }
 
     /// The NULL-safe comparisons are never NULL, on either nullability and against values, `nil` and columns.
@@ -112,6 +127,41 @@ import Testing
         #expect(rendered.binds.map(\.description) == ["0", "9", "Done"])
     }
 
+    /// Arithmetic on integers, floats and `Decimal` with a value on either side, casts keeping nullability, `between`
+    /// with expressions as bounds, and arithmetic assigned by `update()`.
+    @Test func arithmeticCastsBetweenExpressionsAndAssignments() {
+        let perUnit: Expr<Double> = PriceModel.quantity.cast(to: Double.self) / PriceModel.rate
+        let minimum: Expr<Double?> = PriceModel.minimum.cast(to: Double.self)
+        let remaining: Expr<Decimal?> = 100 - PriceModel.discount
+        let withinMinimum: Expr<Bool?> = PriceModel.quantity.between(PriceModel.minimum, PriceModel.quantity + 10)
+        let nearRate: Expr<Bool> = PriceModel.rate.between(PriceModel.rate - 1, PriceModel.rate * 2)
+        let rendered = PriceModel.query()
+            .filter(PriceModel.quantity / 3 > 1)
+            .filter(perUnit < minimum)
+            .filter(remaining >= PriceModel.amount)
+            .filter(withinMinimum)
+            .filter(nearRate)
+            .orderBy((PriceModel.amount * PriceModel.quantity.cast(to: Decimal.self)).desc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "prices".* FROM "prices" WHERE ("prices"."quantity" / $1) > $2 AND (CAST("prices"."quantity" AS double precision) / "prices"."rate") < CAST("prices"."minimum" AS double precision) AND ($3 - "prices"."discount") >= "prices"."amount" AND "prices"."quantity" BETWEEN "prices"."minimum" AND ("prices"."quantity" + $4) AND "prices"."rate" BETWEEN ("prices"."rate" - $5) AND ("prices"."rate" * $6) ORDER BY ("prices"."amount" * CAST("prices"."quantity" AS numeric)) DESC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["3", "1", "100", "10", "1.0", "2.0"])
+
+        let update = PriceModel.update()
+            .set(PriceModel.quantity, to: PriceModel.quantity - 1)
+            .set(PriceModel.minimum, to: PriceModel.quantity / 2)
+            .set(PriceModel.discount, to: PriceModel.discount * 2)
+            .filter(PriceModel.id == 7)
+            .render()
+        #expect(
+            update.sql
+                == #"UPDATE "prices" SET "quantity" = ("prices"."quantity" - $1), "minimum" = ("prices"."quantity" / $2), "discount" = ("prices"."discount" * $3) WHERE "prices"."id" = $4"#
+        )
+        #expect(update.binds.map(\.description) == ["1", "2", "2", "7"])
+    }
+
     @Test func mutations() {
         let insert = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
             .returningAll()
@@ -132,8 +182,13 @@ import Testing
             .returningAll()
             .render()
         #expect(stored.sql == upsert.sql)
-        // Waits for slices 8, 10 and 26: `TaskModel.update()` setting an enum `state`, `previousState` to `nil` and
-        // `attempts` to `TaskModel.attempts + 1`.
+        let update = TaskModel.update()
+            .set(TaskModel.attempts, to: TaskModel.attempts + 1)
+            .filter(TaskModel.id == 42)
+            .render()
+        #expect(update.sql == #"UPDATE "tasks" SET "attempts" = ("tasks"."attempts" + $1) WHERE "tasks"."id" = $2"#)
+        #expect(update.binds.map(\.description) == ["1", "42"])
+        // Waits for slice 26: the same update also setting the enum `state` to `.completed` and `previousState` to `nil`.
         // Waits for slice 21: `TaskModel.delete().whereExists(…)` with a correlated `ProjectModel` subquery.
     }
 

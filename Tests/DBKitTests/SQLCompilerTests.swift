@@ -10,6 +10,14 @@ class CompilerUserModel {
     var score: Int64?
 }
 
+/// The `compact_rows` table of rust-dbkit's `sql_compiler.rs`: two `smallint` columns.
+@Model(table: "compact_rows")
+class CompilerCompactRowModel {
+    @Key var id: Int64
+    var leftUnits: Int16
+    var rightUnits: Int16
+}
+
 @Suite struct SQLCompilerTests {
     @Test func compilesBasicFilter() {
         let rendered = CompilerUserModel.query().filter(CompilerUserModel.email == "a@b.com").render()
@@ -102,5 +110,66 @@ class CompilerUserModel {
         let rendered = CompilerUserModel.query().filter(CompilerUserModel.id.between(1, 5)).render()
         #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE "users"."id" BETWEEN $1 AND $2"#)
         #expect(rendered.binds.map(\.description) == ["1", "5"])
+    }
+
+    @Test func compilesAddOperatorFilter() {
+        let predicate: Expr<Bool> = SaleModel.amount + 5 > 10
+        let rendered = SaleModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "sales".* FROM "sales" WHERE ("sales"."amount" + $1) > $2"#)
+        #expect(rendered.binds.map(\.description) == ["5", "10"])
+    }
+
+    @Test func compilesSubOperatorFilter() {
+        let predicate: Expr<Bool> = SaleModel.amount - 7 <= 100
+        let rendered = SaleModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "sales".* FROM "sales" WHERE ("sales"."amount" - $1) <= $2"#)
+        #expect(rendered.binds.map(\.description) == ["7", "100"])
+    }
+
+    @Test func compilesNestedArithmeticExpressionWithStableParentheses() {
+        let predicate: Expr<Bool> = ((SaleModel.amount + 5) - SaleModel.id) + 2 >= 20
+        let rendered = SaleModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "sales".* FROM "sales" WHERE ((("sales"."amount" + $1) - "sales"."id") + $2) >= $3"#)
+        #expect(rendered.binds.map(\.description) == ["5", "2", "20"])
+    }
+
+    /// `smallint` with an `integer` operand is `Expr<Int32>`, so it compares with an `Int32` value. Two `smallint`s, or a
+    /// `smallint` and an untyped literal, stay `Expr<Int16>`, as in PostgreSQL.
+    @Test func compilesSmallintAddFilterAgainstIntegerRHS() {
+        let total: Expr<Int32> = CompilerCompactRowModel.leftUnits + CompilerCompactRowModel.rightUnits.cast(to: Int32.self)
+        let rendered = CompilerCompactRowModel.query().filter(total > Int32(10)).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "compact_rows".* FROM "compact_rows" WHERE ("compact_rows"."left_units" + CAST("compact_rows"."right_units" AS integer)) > $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["10"])
+
+        let sameWidth: Expr<Int16> = CompilerCompactRowModel.leftUnits + CompilerCompactRowModel.rightUnits
+        let literal: Expr<Int16> = CompilerCompactRowModel.leftUnits + 1
+        let sameWidthRendered = CompilerCompactRowModel.query().filter(sameWidth > literal).render()
+        #expect(
+            sameWidthRendered.sql
+                == #"SELECT "compact_rows".* FROM "compact_rows" WHERE ("compact_rows"."left_units" + "compact_rows"."right_units") > ("compact_rows"."left_units" + $1)"#
+        )
+        #expect(sameWidthRendered.binds.map(\.description) == ["1"])
+    }
+
+    @Test func compilesSmallintSubFilterAgainstIntegerRHS() {
+        let delta: Expr<Int32> = CompilerCompactRowModel.leftUnits - CompilerCompactRowModel.rightUnits.cast(to: Int32.self)
+        let rendered = CompilerCompactRowModel.query().filter(delta <= Int32(3)).render()
+        #expect(
+            rendered.sql
+                == #"SELECT "compact_rows".* FROM "compact_rows" WHERE ("compact_rows"."left_units" - CAST("compact_rows"."right_units" AS integer)) <= $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["3"])
+
+        let sameWidth: Expr<Int16> = CompilerCompactRowModel.leftUnits - CompilerCompactRowModel.rightUnits
+        let literal: Expr<Int16> = 3 - CompilerCompactRowModel.rightUnits
+        let sameWidthRendered = CompilerCompactRowModel.query().filter(sameWidth <= literal).render()
+        #expect(
+            sameWidthRendered.sql
+                == #"SELECT "compact_rows".* FROM "compact_rows" WHERE ("compact_rows"."left_units" - "compact_rows"."right_units") <= ($1 - "compact_rows"."right_units")"#
+        )
+        #expect(sameWidthRendered.binds.map(\.description) == ["3"])
     }
 }

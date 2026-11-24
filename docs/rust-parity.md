@@ -15,7 +15,8 @@ The kit lacked these rust-dbkit features. They are part of this port:
 
 - `sparsevec` with the five distance functions
 - `bit` with Hamming and Jaccard distance
-- Mixed integer widths in arithmetic and bitwise operators, producing the wider type
+- Arithmetic on mixed numeric types, following PostgreSQL's promotion: the wider integer, and `Double` for an integer with `Float` or `Double`
+- Mixed integer widths in bitwise operators, producing the wider type
 - `Int16` shift counts besides `Int32`
 - Comparisons on nullable columns typed as `Bool?`
 - Parentheses around a comparison used inside another comparison
@@ -50,6 +51,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - **Updating an active model with nothing assigned.** `update(on:)` sends no query and returns the row unchanged. rust-dbkit returns an error.
 - **Changing a key column on an active model.** The update filters by the key the row was loaded with, so assigning a primary key column moves the row to the new key. rust-dbkit never writes key columns and filters by the assigned key, so it reports the row as not found.
 - **Updating or deleting a new active model.** `update(on:)` and `delete(on:)` need a loaded row; calling them on `ActiveModel()` is a programmer error and traps. rust-dbkit returns an error when a key column is unset.
+- **Arithmetic result types.** They follow PostgreSQL. Arithmetic on two `smallint`s stays `Int16`, where rust-dbkit types it `Int32`, and `+`, `-` and `*` accept mixed numeric types, which rust-dbkit accepts only in `/`.
 - **Migrations.** rust-dbkit delegates to sqlx and its `_sqlx_migrations` table. `db.migrate(_:)` reads `.sql` files at runtime and records them in `_dbkit_migrations`.
 
 ## API Changes From The Kit

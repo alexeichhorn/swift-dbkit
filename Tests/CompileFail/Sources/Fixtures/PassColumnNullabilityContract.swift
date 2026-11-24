@@ -70,7 +70,16 @@ private func valueComparisonsFollowTheColumn() {
 
     // Waits for slice 15: `lowercased()` keeping nullability, comparisons on it, `SQL.coalesce`, `SQL.greatest` and
     // `SQL.least` (a required argument makes them required).
-    // Waits for slice 10: comparisons on nullable arithmetic such as `nullableCount + requiredCount`.
+
+    // Arithmetic on a nullable column is nullable, and so are comparisons on it.
+    let nullableSum = NullabilityRowModel.nullableCount + NullabilityRowModel.requiredCount
+    let requiredSum = NullabilityRowModel.requiredCount + 1
+    let _: Expr<Bool?> = nullableSum == 10
+    let _: Expr<Bool?> = nullableSum == nil
+    let _: Expr<Bool?> = nullableSum < 10
+    let _: Expr<Bool?> = nullableSum.between(1, 10)
+    let _: Expr<Bool> = requiredSum == 10
+    let _: Expr<Bool> = requiredSum < 10
 }
 
 // rust-dbkit's `eq_col`, `ne_col`, `lt_col`, `le_col`, `gt_col` and `ge_col` are the operators between two columns, and
@@ -131,7 +140,14 @@ private func columnComparisonsAreNullableWhenEitherColumnIs() {
     _ = NullabilityRowModel.update().set(NullabilityRowModel.requiredText, to: "updated").filter(nullableComparison)
     _ = NullabilityRowModel.delete().filter(nullableComparison)
     // Waits for slice 15: `lowercased()` of a required column compared with a nullable one and the reverse, `Expr<Bool?>`.
-    // Waits for slice 10: `nullableCount + requiredCount` compared with `requiredCount` by each operator, `Expr<Bool?>`.
+
+    let nullableSum = NullabilityRowModel.nullableCount + NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = nullableSum == NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = nullableSum != NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = nullableSum < NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = nullableSum <= NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = nullableSum > NullabilityRowModel.requiredCount
+    let _: Expr<Bool?> = nullableSum >= NullabilityRowModel.requiredCount
 }
 
 private func fallbacksAreRequired() {
