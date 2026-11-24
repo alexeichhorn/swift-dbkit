@@ -191,16 +191,15 @@ public struct Returning<Row: Model>: Sendable where Row.Base == Row {
     }
 }
 
-/// Renders a mutation. Relation paths aren't supported because mutations have no joins.
+/// Renders a mutation. Relation paths aren't supported because mutations have no joins; the target table is the
+/// enclosing scope of the mutation's subqueries.
 struct MutationStatement: Sendable {
     let table: String
     let body: @Sendable (SQLRenderer, JoinScope) -> String
 
     func render(returningAll: Bool) -> RenderedSQL {
         let renderer = SQLRenderer()
-        let scope = JoinScope(base: table)
-        let sql = body(renderer, scope) + (returningAll ? " RETURNING *" : "")
-        precondition(scope.joins.isEmpty, "relation paths are only supported in SELECT queries")
+        let sql = body(renderer, JoinScope(base: table)) + (returningAll ? " RETURNING *" : "")
         return RenderedSQL(sql: sql, binds: renderer.binds)
     }
 }
