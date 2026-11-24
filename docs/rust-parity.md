@@ -47,6 +47,9 @@ The kit lacked these rust-dbkit features. They are part of this port:
 ## Different On Purpose
 
 - **Counting a query with joins.** rust-dbkit counts the rows of the joined query, so a user with three joined todos counts three times. `count`, `exists` and `paginate` here count distinct rows of the query's own model.
+- **Updating an active model with nothing assigned.** `update(on:)` sends no query and returns the row unchanged. rust-dbkit returns an error.
+- **Changing a key column on an active model.** The update filters by the key the row was loaded with, so assigning a primary key column moves the row to the new key. rust-dbkit never writes key columns and filters by the assigned key, so it reports the row as not found.
+- **Updating or deleting a new active model.** `update(on:)` and `delete(on:)` need a loaded row; calling them on `ActiveModel()` is a programmer error and traps. rust-dbkit returns an error when a key column is unset.
 - **Migrations.** rust-dbkit delegates to sqlx and its `_sqlx_migrations` table. `db.migrate(_:)` reads `.sql` files at runtime and records them in `_dbkit_migrations`.
 
 ## API Changes From The Kit
@@ -62,6 +65,8 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 
 | Rust test | Reason |
 | --- | --- |
+| `integration_postgres.rs::active_save_composite_changing_key_returns_not_found` | Changing a key column on an active model moves the row, see "Different On Purpose"; `activeSaveChangingACompositeKeyColumnMovesTheRow` covers it. |
+| `integration_postgres.rs::active_insert_missing_required_field_errors` | `ActiveModel` inserts only through `save(on:)`, so this is `active_save_missing_required_fields_errors_on_insert`. |
 | `ui/fail_appended_model_type.rs` | `@Model` adds members and extensions only, so it can't declare a type under another name, such as `UserModel` for `User`. |
 | `ui/fail_derive_model_with_dbkit_field_attr.rs` | Swift has no derive macros; `@Model` is the only way to declare a model. |
 | `ui/fail_model_suffix_double_model_type.rs` | `@Model` can't declare a type under another name, such as `UserModelModel` for `UserModel`. |

@@ -23,3 +23,17 @@ class OrderLineModel {
     @Key var lineID: Int64
     var note: String
 }
+
+@Model(table: "nullable_rows")
+class NullableRowModel {
+    @Key @AutoIncrement var id: Int64
+    var note: String?
+}
+
+/// A key with a nullable column.
+@Model(table: "hints")
+class HintModel {
+    @Key var name: String
+    @Key var region: String?
+    var note: String
+}

@@ -175,9 +175,20 @@ class RolledBackNoteModel {
             #expect(inserted == 2)
             // Waits for slice 6: inserting "Dup" with `onConflictDoNothing(UserModel.email)` affects 0 rows, then
             // `onConflict(UserModel.email, doUpdate: UserModel.name).returningAll().first(on:)` renames Alpha to "Alpha 2".
-            // Waits for slice 5: `active()` on "Alpha 2", `region = "eu"`, `update(on:)`; a new `ActiveModel<UserModel>`
-            // "Saved" with `save(on:)`, `id > 0`, and `saved.delete(on:) == 1` after the update below.
+            let alpha = try #require(try await UserModel.query().filter(UserModel.email == "alpha@db.com").first(on: tx))
+            var active = alpha.active()
+            active.region = "eu"
+            let updated = try await active.update(on: tx)
+            #expect(updated.region == "eu" && updated.name == alpha.name)
+
+            var draft = ActiveModel<UserModel>()
+            draft.name = "Saved"
+            draft.email = "saved@db.com"
+            let saved = try await draft.save(on: tx)
+            #expect(saved.id > 0)
+
             // Waits for slice 8: `update().set(UserModel.region, to: nil).filter(UserModel.region == "us").execute(on:) == 1`.
+            #expect(try await saved.delete(on: tx) == 1)
             // Waits for slice 23: `count(on:) == 2`, `exists(on:)` for beta, `paginate(page: 2, perPage: 1, on:)`.
             // Waits for slice 25: `stream(on:)` yields "Alpha 2" and "Beta".
         }
@@ -195,6 +206,43 @@ class RolledBackNoteModel {
             let deleted = try await UserModel.delete().filter(UserModel.region == "apac").returningAll().all(on: tx)
             #expect(deleted.map(\.name).sorted() == ["Kim", "Sam"])
             #expect(try await UserModel.query().all(on: tx).map(\.name) == ["Alex"])
+        }
+    }
+
+    @Test func anActiveUpdateOfADeletedRowThrowsRowNotFound() async throws {
+        try await withRollback { tx in
+            try await createUsers(on: tx)
+            try await seedUsers(on: tx)
+            let user = try #require(try await UserModel.find(1, on: tx))
+            try await user.delete(on: tx)
+
+            var active = user.active()
+            active.name = "Gone"
+            let error = try await #require(throws: DBKitError.self) { try await active.save(on: tx) }
+            #expect(error == .rowNotFound)
+            #expect(error.description == "no row matches the primary key")
+        }
+    }
+
+    /// `hints` has no primary key constraint, which would forbid the NULL; the model's key still names both columns.
+    @Test func aRowWhoseKeyHasANullColumnIsUpdatedAndDeleted() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE TEMP TABLE hints (name TEXT NOT NULL, region TEXT, note TEXT NOT NULL)")
+            try await HintModel.insert([
+                HintModel.Insert(name: "a", note: "target"),
+                HintModel.Insert(name: "a", region: "eu", note: "same name"),
+                HintModel.Insert(name: "b", note: "same region"),
+            ])
+            .execute(on: tx)
+            let row = try #require(try await HintModel.query().filter(HintModel.note == "target").first(on: tx))
+            #expect(row.name == "a" && row.region == nil)
+
+            var active = row.active()
+            active.note = "changed"
+            #expect(try await active.update(on: tx).note == "changed")
+            #expect(try await HintModel.query().filter(HintModel.note == "changed").all(on: tx).count == 1)
+            #expect(try await row.delete(on: tx) == 1)
+            #expect(try await HintModel.query().orderBy(HintModel.name.asc).all(on: tx).map(\.note) == ["same name", "same region"])
         }
     }
 
