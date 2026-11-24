@@ -76,6 +76,12 @@ public struct Transaction: DatabaseExecutor {
         guard !connection.isClosed else { throw DBKitError.connectionClosed }
         return try await connection.query(query, logger: logger)
     }
+
+    /// Sets a PostgreSQL setting until the transaction ends (`set_config(name, value, true)`), so it never leaks to
+    /// other users of the pooled connection: `try await tx.setLocal("statement_timeout", "5s")`.
+    public func setLocal(_ name: String, _ value: String) async throws {
+        _ = try await query("SELECT set_config(\(name), \(value), true)").collect()
+    }
 }
 
 /// A parsed `postgres://` / `postgresql://` URL with an optional `sslmode` query parameter.
