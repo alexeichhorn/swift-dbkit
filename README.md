@@ -71,6 +71,14 @@ let created = try await UserModel.insert(UserModel.Insert(name: "Alex", email: "
     .first(on: db)
 ```
 
+Update one loaded row with `active()`; only the columns you set are written:
+
+```swift
+var active = user.active()
+active.name = "Renamed"
+let updated = try await active.update(on: db)
+```
+
 Delete a loaded row by primary key:
 
 ```swift

@@ -20,6 +20,20 @@ let inserted = try await UserModel.insert(UserModel.Insert(name: "Sam", email: "
 
 ## Update
 
+For one loaded row, use `active()`. It tracks the columns you assign, so the update writes only those, by
+primary key:
+
+```swift
+let user = try await UserModel.find(1, on: db)!
+var active = user.active()
+active.name = "Renamed"
+let updated = try await active.update(on: db)  // UPDATE "users" SET "name" = $1 WHERE "users"."id" = $2 RETURNING *
+```
+
+The update filters by the key the row was loaded with, so assigning a key column moves the row to the new key. With
+nothing assigned, `update(on:)` sends no query and returns the row unchanged. When no row matches the key, it throws
+`DBKitError.rowNotFound`.
+
 Use the update builder for bulk or conditional updates. `set(_:to:)` takes a value of the column's type:
 
 ```swift
@@ -53,6 +67,24 @@ let removed = try await JobModel.delete().filter(JobModel.state == "done").execu
 ```
 
 `user.delete(on:)` deletes by primary key. Without a filter, `delete()` removes every row.
+
+## Save
+
+`save(on:)` inserts a new active model and updates a loaded one, for code that genuinely needs one path for both:
+
+```swift
+var draft = ActiveModel<UserModel>()
+draft.name = "Saved"
+draft.email = "saved@db.com"
+let created = try await draft.save(on: db)
+
+var active = created.active()
+active.name = "Renamed"
+let updated = try await active.save(on: db)
+```
+
+Reading a column you haven't set on a new `ActiveModel` is a programmer error and traps, as are `update(on:)` and
+`delete(on:)` on it.
 
 ## Bulk Insert
 
