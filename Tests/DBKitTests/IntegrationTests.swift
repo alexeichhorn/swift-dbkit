@@ -575,6 +575,42 @@ class ValueRowModel {
             #expect(updated.weights == [3] && updated.backupEmail == EmailAddress("c@d.com"))
         }
     }
+
+    /// Each function decodes as its expression type, which is PostgreSQL's: `POWER` is `double precision`, or
+    /// `numeric` for `numeric` operands, and `LEAST` and `GREATEST` skip NULL arguments.
+    @Test func sqlFunctionsDecodeAsTheirExpressionTypes() async throws {
+        try await withRollback { tx in
+            try await tx.query(
+                """
+                CREATE TEMP TABLE prices (
+                    id BIGSERIAL PRIMARY KEY, quantity INTEGER NOT NULL, minimum INTEGER, amount NUMERIC NOT NULL, discount NUMERIC,
+                    rate DOUBLE PRECISION NOT NULL
+                )
+                """)
+            try await PriceModel.insert(PriceModel.Insert(quantity: 3, minimum: nil, amount: 1.5, discount: nil, rate: 0.5)).execute(on: tx)
+
+            let row: (Double, Decimal, Double?, Int32, Int32?, Decimal, Date) = try #require(
+                try await PriceModel.query()
+                    .select(
+                        SQL.power(PriceModel.quantity, 2),
+                        SQL.power(PriceModel.amount, 2),
+                        SQL.power(PriceModel.minimum, PriceModel.rate),
+                        SQL.greatest(PriceModel.minimum, PriceModel.quantity),
+                        SQL.least(PriceModel.minimum, PriceModel.minimum),
+                        SQL.coalesce(PriceModel.discount, PriceModel.amount),
+                        SQL.dateTrunc(.day, SQL.now())
+                    )
+                    .first(on: tx))
+            let (squared, decimalSquared, nullPower, greatest, least, discount, today) = row
+            #expect(squared == 9)
+            #expect(decimalSquared == 2.25)
+            #expect(nullPower == nil)
+            #expect(greatest == 3)
+            #expect(least == nil)
+            #expect(discount == 1.5)
+            #expect(abs(today.timeIntervalSinceNow) < 2 * 86_400)
+        }
+    }
 }
 
 /// `users` as a temp table, which shadows a real table of that name until the transaction ends.

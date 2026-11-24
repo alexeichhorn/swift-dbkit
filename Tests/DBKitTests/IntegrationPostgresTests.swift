@@ -834,6 +834,10 @@ import Testing
             let total: Decimal?
             let count: Int64
         }
+        struct BucketAggregate: Decodable {
+            let bucket: Date
+            let total: Decimal?
+        }
         struct SaleExtremaAggregate: Decodable {
             let region: String
             let firstSaleAt: Date
@@ -878,8 +882,21 @@ import Testing
             #expect(regionRows.map(\.total) == [200, 110])
             #expect(regionRows.map(\.count) == [1, 2])
 
-            // Waits for slice 15: the totals per `SQL.dateTrunc(.day, SaleModel.createdAt)` bucket, 140 on the first day
-            // and 200 on the second, once unordered and once ordered by the bucket descending.
+            let bucketRows = try await SaleModel.query()
+                .select(SQL.dateTrunc(.day, SaleModel.createdAt).as("bucket"), SQL.sum(SaleModel.amount).as("total"))
+                .groupBy(SQL.dateTrunc(.day, SaleModel.createdAt))
+                .all(as: BucketAggregate.self, on: tx)
+                .sorted { $0.bucket < $1.bucket }
+            #expect(bucketRows.map(\.bucket) == [isoDate("2024-02-01T00:00:00Z"), isoDate("2024-02-02T00:00:00Z")])
+            #expect(bucketRows.map(\.total) == [140, 200])
+
+            let orderedBuckets = try await SaleModel.query()
+                .select(SQL.dateTrunc(.day, SaleModel.createdAt).as("bucket"), SQL.sum(SaleModel.amount).as("total"))
+                .groupBy(SQL.dateTrunc(.day, SaleModel.createdAt))
+                .orderBy(SQL.dateTrunc(.day, SaleModel.createdAt).desc)
+                .all(as: BucketAggregate.self, on: tx)
+            #expect(orderedBuckets.map(\.bucket) == [isoDate("2024-02-02T00:00:00Z"), isoDate("2024-02-01T00:00:00Z")])
+            #expect(orderedBuckets.map(\.total) == [200, 140])
 
             // rust-dbkit orders by the select alias `total`, which is planned (#2); this orders by the aggregate itself.
             let orderedRegions = try await SaleModel.query()
@@ -960,6 +977,82 @@ import Testing
             #expect(allNullExtrema.maxNote == nil)
         }
     }
+
+    /// `DATE_TRUNC` of a `timestamp` column truncates in the session's time zone, so this sets it to UTC.
+    @Test func functionExpressionsRoundtrip() async throws {
+        try await withRollback { tx in
+            try await tx.query("SET LOCAL TIME ZONE 'UTC'")
+            try await setupSchema(on: tx)
+            let row1 = try await seedFuncRow(
+                on: tx, email: "alpha@ex.com", backupEmail: nil, region: "us", startsAt: isoDate("2024-01-02T10:00:00Z"))
+            let row2 = try await seedFuncRow(
+                on: tx, email: nil, backupEmail: "beta@ex.com", region: "eu", startsAt: isoDate("2024-01-02T12:00:00Z"))
+            let row3 = try await seedFuncRow(on: tx, email: nil, backupEmail: nil, region: "uk", startsAt: isoDate("2024-01-03T09:00:00Z"))
+            let row4 = try await seedFuncRow(
+                on: tx, email: "gamma@ex.com", backupEmail: "backup@ex.com", region: nil, startsAt: isoDate("2024-01-03T15:00:00Z"))
+            let dayStart = isoDate("2024-01-02T00:00:00Z")
+
+            let upperMatch = try await FuncRowModel.query()
+                .filter(SQL.upper(SQL.coalesce(FuncRowModel.email, FuncRowModel.backupEmail)) == "BETA@EX.COM")
+                .all(on: tx)
+            #expect(upperMatch.map(\.id) == [row2.id])
+
+            let fallbackMatch = try await FuncRowModel.query()
+                .filter(SQL.coalesce(FuncRowModel.email, "fallback") == "fallback")
+                .all(on: tx)
+            #expect(fallbackMatch.map(\.id).sorted() == [row2.id, row3.id])
+
+            let nestedMatch = try await FuncRowModel.query()
+                .filter(SQL.coalesce(SQL.coalesce(FuncRowModel.email, FuncRowModel.backupEmail), "none") == "none")
+                .all(on: tx)
+            #expect(nestedMatch.map(\.id) == [row3.id])
+
+            let truncatedMatch = try await FuncRowModel.query()
+                .filter(SQL.dateTrunc(.day, FuncRowModel.startsAt) == dayStart)
+                .all(on: tx)
+            #expect(truncatedMatch.map(\.id).sorted() == [row1.id, row2.id])
+
+            let regionMatch = try await FuncRowModel.query()
+                .filter(SQL.upper(SQL.coalesce(FuncRowModel.region, "unknown")) == "UNKNOWN")
+                .all(on: tx)
+            #expect(regionMatch.map(\.id) == [row4.id])
+
+            let combinedMatch = try await FuncRowModel.query()
+                .filter(SQL.upper(SQL.coalesce(FuncRowModel.email, FuncRowModel.backupEmail)) == "ALPHA@EX.COM")
+                .filter(SQL.dateTrunc(.day, FuncRowModel.startsAt) == dayStart)
+                .all(on: tx)
+            #expect(combinedMatch.map(\.id) == [row1.id])
+
+            let greatestFallback = try await FuncRowModel.query()
+                .filter(SQL.greatest(FuncRowModel.email, "") == "")
+                .all(on: tx)
+            #expect(greatestFallback.map(\.id).sorted() == [row2.id, row3.id])
+
+            let leastFallback = try await FuncRowModel.query()
+                .filter(SQL.least("zzzz", FuncRowModel.email) == "zzzz")
+                .all(on: tx)
+            #expect(leastFallback.map(\.id).sorted() == [row2.id, row3.id])
+
+            let bothNull = try await FuncRowModel.query()
+                .filter(SQL.greatest(FuncRowModel.email, FuncRowModel.backupEmail).isNull)
+                .all(on: tx)
+            #expect(bothNull.map(\.id) == [row3.id])
+        }
+    }
+
+    @Test func trimFilterMatchesTrimmedText() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let exact = try await seedTextSample(on: tx, label: "exact", body: "alpha")
+            let padded = try await seedTextSample(on: tx, label: "padded", body: "  alpha  ")
+            _ = try await seedTextSample(on: tx, label: "different", body: "beta")
+            _ = try await seedTextSample(on: tx, label: "blank", body: "   ")
+            _ = try await seedTextSample(on: tx, label: "missing", body: nil)
+
+            let matches = try await TextSampleModel.query().filter(SQL.trim(TextSampleModel.body) == "alpha").all(on: tx)
+            #expect(matches.map(\.id).sorted() == [exact.id, padded.id])
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.
@@ -982,6 +1075,21 @@ private func setupSchema(on tx: Transaction) async throws {
         "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMP NOT NULL)")
     try await tx.query(
         "CREATE TEMP TABLE events (id UUID PRIMARY KEY, name TEXT NOT NULL, starts_at TIMESTAMP NOT NULL, day DATE NOT NULL)")
+    try await tx.query(
+        "CREATE TEMP TABLE func_rows (id BIGSERIAL PRIMARY KEY, email TEXT, backup_email TEXT, region TEXT, starts_at TIMESTAMP NOT NULL)")
+    try await tx.query("CREATE TEMP TABLE text_samples (id BIGSERIAL PRIMARY KEY, label TEXT NOT NULL, body TEXT)")
+}
+
+private func seedFuncRow(on tx: Transaction, email: String?, backupEmail: String?, region: String?, startsAt: Date) async throws
+    -> FuncRowModel
+{
+    try #require(
+        try await FuncRowModel.insert(FuncRowModel.Insert(email: email, backupEmail: backupEmail, region: region, startsAt: startsAt))
+            .returningAll().first(on: tx))
+}
+
+private func seedTextSample(on tx: Transaction, label: String, body: String?) async throws -> TextSampleModel {
+    try #require(try await TextSampleModel.insert(TextSampleModel.Insert(label: label, body: body)).returningAll().first(on: tx))
 }
 
 private func seedUser(on tx: Transaction, name: String, email: String) async throws -> UserModel {

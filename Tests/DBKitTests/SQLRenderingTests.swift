@@ -278,8 +278,61 @@ class LeaseModel {
             rendered.sql
                 == #"SELECT "sales"."region" AS "region", COUNT("sales"."id") FILTER (WHERE "sales"."region" = $1) AS "us_sale_count", SUM("sales"."amount") AS "total" FROM "sales" GROUP BY "sales"."region" HAVING SUM("sales"."amount") > $2"#
         )
-        // Waits for slice 15: the same aggregates per `SQL.dateTrunc(.day, SaleModel.createdAt)` bucket, selected as
-        // "bucket" and grouped by, as the kit renders them.
+
+        let buckets = SaleModel.query()
+            .select(
+                SQL.dateTrunc(.day, SaleModel.createdAt).as("bucket"),
+                SQL.count(SaleModel.id).filter(usSale).as("us_sale_count"),
+                SQL.sum(SaleModel.amount).as("total")
+            )
+            .groupBy(SQL.dateTrunc(.day, SaleModel.createdAt))
+            .having(SQL.sum(SaleModel.amount) > 0)
+            .render()
+        #expect(
+            buckets.sql
+                == #"SELECT DATE_TRUNC('day', "sales"."created_at") AS "bucket", COUNT("sales"."id") FILTER (WHERE "sales"."region" = $1) AS "us_sale_count", SUM("sales"."amount") AS "total" FROM "sales" GROUP BY DATE_TRUNC('day', "sales"."created_at") HAVING SUM("sales"."amount") > $2"#
+        )
+    }
+
+    /// Every `DateTruncUnit` renders PostgreSQL's name for it. Functions work in `update().set`, `GROUP BY` and
+    /// `HAVING`, and inside and around aggregates.
+    @Test func sqlFunctionsInEveryClause() {
+        let units: [(DateTruncUnit, String)] = [
+            (.microseconds, "microseconds"), (.milliseconds, "milliseconds"), (.second, "second"), (.minute, "minute"),
+            (.hour, "hour"), (.day, "day"), (.week, "week"), (.month, "month"), (.quarter, "quarter"), (.year, "year"),
+            (.decade, "decade"), (.century, "century"), (.millennium, "millennium"),
+        ]
+        for (unit, name) in units {
+            let rendered = LeaseModel.query().filter(SQL.dateTrunc(unit, LeaseModel.startsAt) < SQL.now()).render()
+            #expect(rendered.sql == #"SELECT "leases".* FROM "leases" WHERE DATE_TRUNC('\#(name)', "leases"."starts_at") < NOW()"#)
+        }
+
+        let update = UserModel.update()
+            .set(UserModel.name, to: UserModel.name.uppercased())
+            .set(UserModel.region, to: UserModel.region.trimmed())
+            .filter(UserModel.email.lowercased().hasPrefix("admin"))
+            .render()
+        #expect(
+            update.sql
+                == #"UPDATE "users" SET "name" = UPPER("users"."name"), "region" = TRIM("users"."region") WHERE STARTS_WITH(LOWER("users"."email"), $1)"#
+        )
+        #expect(update.binds.map(\.description) == ["admin"])
+
+        let grouped: Projection<String, String?, String> = SaleModel.query()
+            .select(
+                SaleModel.region.lowercased().as("region"),
+                SQL.max(SaleModel.region.uppercased()).as("label"),
+                (SQL.min(SaleModel.region).trimmed() ?? "").as("first_region")
+            )
+            .groupBy(SaleModel.region.lowercased())
+            .having(SQL.greatest(SQL.sum(SaleModel.amount), 0) > 100)
+            .orderBy(SQL.least(SQL.countAll(), 10).desc)
+        let rendered = grouped.render()
+        #expect(
+            rendered.sql
+                == #"SELECT LOWER("sales"."region") AS "region", MAX(UPPER("sales"."region")) AS "label", COALESCE(TRIM(MIN("sales"."region")), $1) AS "first_region" FROM "sales" GROUP BY LOWER("sales"."region") HAVING GREATEST(SUM("sales"."amount"), $2) > $3 ORDER BY LEAST(COUNT(*), $4) DESC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["", "0", "100", "10"])
     }
 
     /// `groupBy` takes several expressions, `having` predicates combine with `AND`, and aggregates take computed values.

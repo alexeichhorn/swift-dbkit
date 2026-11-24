@@ -41,6 +41,19 @@ class LookupItemModel {
     var optionalLocale: String?
 }
 
+/// rust-dbkit's `MethodSample` of the `*expr_methods*` fixtures, without the columns only `unwrap_or_default` uses.
+@Model(table: "method_samples")
+class MethodSampleModel {
+    @Key var id: Int64
+    var text: String
+    var optionalText: String?
+    var prefix: String
+    var optionalPrefix: String?
+    var count: Int32
+    var optionalCount: Int32?
+    var optionalBool: Bool?
+}
+
 /// rust-dbkit's `Sale` of the `fail_filter_*` fixtures.
 @Model(table: "sales")
 class SaleModel {

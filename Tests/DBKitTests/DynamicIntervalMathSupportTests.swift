@@ -1,13 +1,24 @@
 import DBKit
+import Foundation
 import Testing
+
+/// rust-dbkit's `work_runs` of `dynamic_interval_math_support.rs`. `Date` stands in for its `timestamp` columns.
+@Model(table: "work_runs")
+class WorkRunModel {
+    @Key var id: Int64
+    var status: String
+    var attempts: Int32
+    var updatedAt: Date
+    var createdAt: Date
+}
 
 @Suite struct DynamicIntervalMathSupportTests {
     /// The annotations fail to compile when a result type changes.
     @Test func dynamicIntervalMathAPIPreservesExpectedExpressionTypes() {
+        let retryExponent: Expr<Int32> = SQL.least(SQL.greatest(WorkRunModel.attempts - 1, 0), 10)
+        let retrySeconds: Expr<Double> = SQL.power(2.0, retryExponent) * 60.0
         let _: Expr<Interval> = SQL.interval(seconds: Int64(300))
-        // Waits for slice 15: rust-dbkit's `work_runs` model with `attempts: Int32`, `retryExponent`,
-        // `SQL.least(SQL.greatest(attempts - 1, 0), 10)` as `Expr<Int32>`, `retrySeconds`, `SQL.power(2.0, retryExponent)
-        // * 60.0` as `Expr<Double>`, and `SQL.interval(seconds: retrySeconds)` as `Expr<Interval>`.
+        let _: Expr<Interval> = SQL.interval(seconds: retrySeconds)
     }
     // Waits for slice 22: `queryWithDynamicIntervalMathHasExpectedSQLShape`, which also needs `forUpdate().skipLocked()`.
 }

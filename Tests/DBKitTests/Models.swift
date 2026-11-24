@@ -56,6 +56,24 @@ class SaleModel {
     var createdAt: Date
 }
 
+/// rust-dbkit's `func_rows`. `Date` stands in for its `timestamp` column.
+@Model(table: "func_rows")
+class FuncRowModel {
+    @Key @AutoIncrement var id: Int64
+    var email: String?
+    var backupEmail: String?
+    var region: String?
+    var startsAt: Date
+}
+
+/// rust-dbkit's `text_samples` of `integration_postgres.rs`.
+@Model(table: "text_samples")
+class TextSampleModel {
+    @Key @AutoIncrement var id: Int64
+    var label: String
+    var body: String?
+}
+
 /// The kit's `tasks`. Waits for slice 26: `var state: TaskState` and `var previousState: TaskState?`. Waits for slice
 /// 28: `@DatabaseDefault var updatedAt: Date`.
 @Model(table: "tasks")

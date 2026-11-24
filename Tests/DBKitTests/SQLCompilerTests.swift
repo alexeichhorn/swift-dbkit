@@ -495,4 +495,105 @@ class CompilerWindowRowModel {
         )
         #expect(rendered.binds.isEmpty)
     }
+
+    @Test func compilesPowerWithNullableNumericColumn() {
+        let powered: Expr<Double?> = SQL.power(CompilerUserModel.score, Int64(2))
+        let rendered = CompilerUserModel.query().select(powered.as("powered")).render()
+        #expect(rendered.sql == #"SELECT POWER("users"."score", $1) AS "powered" FROM "users""#)
+        #expect(rendered.binds.map(\.description) == ["2"])
+    }
+
+    @Test func compilesGreatestAndLeastWithNullableOperands() {
+        let lowerBounded: Expr<Int64> = SQL.greatest(CompilerUserModel.score, 0)
+        let upperBounded: Expr<Int64> = SQL.least(100, CompilerUserModel.score)
+        let nullable: Expr<Int64?> = SQL.greatest(CompilerUserModel.score, CompilerUserModel.score)
+        let rendered = CompilerUserModel.query()
+            .select(lowerBounded.as("lower_bounded"), upperBounded.as("upper_bounded"), nullable.as("nullable"))
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT GREATEST("users"."score", $1) AS "lower_bounded", LEAST($2, "users"."score") AS "upper_bounded", GREATEST("users"."score", "users"."score") AS "nullable" FROM "users""#
+        )
+        #expect(rendered.binds.map(\.description) == ["0", "100"])
+    }
+
+    @Test func compilesUpperFunctionFilter() {
+        let predicate: Expr<Bool?> = SQL.upper(CompilerUserModel.email) == "TEST"
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE UPPER("users"."email") = $1"#)
+        #expect(rendered.binds.map(\.description) == ["TEST"])
+    }
+
+    @Test func compilesLowerFunctionWithLiteralInput() {
+        let lowered: Expr<String> = SQL.lower("MiXeD")
+        let rendered = CompilerTextSampleModel.query().select(lowered.as("lowered")).render()
+        #expect(rendered.sql == #"SELECT LOWER($1) AS "lowered" FROM "text_samples""#)
+        #expect(rendered.binds.map(\.description) == ["MiXeD"])
+    }
+
+    /// rust-dbkit binds the unit, which takes any text. `DateTruncUnit` renders as a literal, so the same expression in
+    /// a select list and in `GROUP BY` renders the same.
+    @Test func compilesDateTruncFunctionFilter() throws {
+        let day = Date(timeIntervalSince1970: 1_700_000_000)
+        let rendered = EventModel.query().filter(SQL.dateTrunc(.day, EventModel.startsAt) == day).render()
+        #expect(rendered.sql == #"SELECT "events".* FROM "events" WHERE DATE_TRUNC('day', "events"."starts_at") = $1"#)
+        try #require(rendered.binds.count == 1)
+        #expect(rendered.binds[0].value as? Date == day)
+    }
+
+    @Test func compilesNestedFunctions() {
+        let predicate: Expr<Bool> = SQL.upper(SQL.coalesce(CompilerUserModel.email, "unknown")) == "ALPHA"
+        let rendered = CompilerUserModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "users".* FROM "users" WHERE UPPER(COALESCE("users"."email", $1)) = $2"#)
+        #expect(rendered.binds.map(\.description) == ["unknown", "ALPHA"])
+    }
+
+    @Test func compilesTrimFunctionFilter() {
+        let predicate: Expr<Bool> = SQL.trim(CompilerTextSampleModel.title) == "alpha"
+        let rendered = CompilerTextSampleModel.query().filter(predicate).render()
+        #expect(rendered.sql == #"SELECT "text_samples".* FROM "text_samples" WHERE TRIM("text_samples"."title") = $1"#)
+        #expect(rendered.binds.map(\.description) == ["alpha"])
+    }
+
+    @Test func compilesSelectOnlyWithFuncColumn() {
+        let query: Projection<String?> = CompilerUserModel.query().select(SQL.upper(CompilerUserModel.email))
+        let rendered = query.render()
+        #expect(rendered.sql == #"SELECT UPPER("users"."email") FROM "users""#)
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func compilesGroupByExpression() {
+        let query: Projection<Date, Decimal?> = SaleModel.query()
+            .select(SQL.dateTrunc(.day, SaleModel.createdAt).as("bucket"), SQL.sum(SaleModel.amount).as("total"))
+            .groupBy(SQL.dateTrunc(.day, SaleModel.createdAt))
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT DATE_TRUNC('day', "sales"."created_at") AS "bucket", SUM("sales"."amount") AS "total" FROM "sales" GROUP BY DATE_TRUNC('day', "sales"."created_at")"#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
+    @Test func compilesOrderByExpression() {
+        let rendered = SaleModel.query()
+            .select(SQL.dateTrunc(.day, SaleModel.createdAt).as("bucket"))
+            .orderBy(SQL.dateTrunc(.day, SaleModel.createdAt).desc)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT DATE_TRUNC('day', "sales"."created_at") AS "bucket" FROM "sales" ORDER BY DATE_TRUNC('day', "sales"."created_at") DESC"#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
+    /// rust-dbkit renders `between` as `>=` and `<=`.
+    @Test func compilesBetweenOnFuncExpression() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let end = Date(timeIntervalSince1970: 1_700_000_100)
+        let predicate: Expr<Bool> = SQL.dateTrunc(.day, SaleModel.createdAt).between(start, end)
+        let rendered = SaleModel.query().filter(predicate).render()
+        #expect(
+            rendered.sql == #"SELECT "sales".* FROM "sales" WHERE DATE_TRUNC('day', "sales"."created_at") BETWEEN $1 AND $2"#)
+        #expect(rendered.binds.map { $0.value as? Date } == [start, end])
+    }
 }

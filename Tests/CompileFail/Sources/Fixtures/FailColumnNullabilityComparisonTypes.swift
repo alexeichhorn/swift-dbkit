@@ -12,7 +12,7 @@ private func comparisonsBetweenDifferentTypes() {
     _ = NullabilityRowModel.nullableText.isNotDistinct(from: NullabilityRowModel.requiredCount)  // error: requires the types
     // Integer widths don't mix in comparisons.
     _ = NullabilityRowModel.requiredCount <= NullabilityRowModel.id  // error: requires the types
-    // Waits for slice 15: `NullabilityRowModel.nullableText.lowercased() == NullabilityRowModel.requiredCount`.
+    _ = NullabilityRowModel.nullableText.lowercased() == NullabilityRowModel.requiredCount  // error: requires the types
 }
 
 // A comparison with a nullable column is not `Expr<Bool>`, one between required columns not `Expr<Bool?>`, and the

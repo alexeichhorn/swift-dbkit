@@ -6,7 +6,8 @@ import DBKit
 private func columnsDoNotChangeNullability() {
     let _: Column<NullabilityRowModel, String> = NullabilityRowModel.nullableText  // error: cannot assign value of type
     let _: Column<NullabilityRowModel, String?> = NullabilityRowModel.requiredText  // error: cannot assign value of type
-    // Waits for slice 15: `lowercased()` of a nullable column is not `Expr<String>`, of a required one not `Expr<String?>`.
+    let _: Expr<String> = NullabilityRowModel.nullableText.lowercased()  // error: cannot assign value of type
+    let _: Expr<String?> = NullabilityRowModel.requiredText.lowercased()  // error: cannot assign value of type
 }
 
 private func comparisonsDoNotChangeNullability() {

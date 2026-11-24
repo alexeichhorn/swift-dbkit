@@ -28,6 +28,10 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - Streaming of projections, grouping and aggregates
 - Schema-qualified tables, as an optional `schema:` argument on `@Model`
 - Property names starting with `__dbkit_` are reserved for generated code and rejected by `@Model`, so a property such as `_name` no longer clashes with the generated storage
+- `SQL.power` with any numeric type on either side, required or nullable; two `Decimal`s give `Decimal`
+- `hasPrefix` and `SQL.startsWith` with a nullable prefix, giving `Bool?`
+- `SQL.coalesce` with a required first argument
+- `SQL.least` and `SQL.greatest` with one required and one nullable expression, giving a required result
 
 ## Left Out
 
@@ -105,3 +109,5 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `ui/fail_interval_float_hours.rs` | `SQL.interval(hours:)` takes fractions, see "Interval units" under "Different On Purpose". |
 | `sql_compiler.rs::condition_preserves_required_predicate_type` | A condition's predicate is always `Bool?`, see "A condition's predicate" under "Different On Purpose". |
 | `sql_compiler.rs::compiles_order_by_alias` | Ordering by a select alias is planned, see "Planned". |
+| `expr_methods_sql.rs::unwrap_or_default_preserves_literal_types` | `unwrap_or_default()` is left out; `??` with an explicit fallback covers it. |
+| `expr_methods_sql.rs::unwrap_or_default_uses_the_types_default_without_requiring_clone` | `unwrap_or_default()` is left out; `??` with an explicit fallback covers it. |

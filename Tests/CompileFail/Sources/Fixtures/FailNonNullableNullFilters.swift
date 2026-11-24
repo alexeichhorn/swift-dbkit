@@ -24,5 +24,5 @@ private func nullFiltersOnRequiredColumns() {
     _ = query.filter(NullabilityRowModel.requiredText.like(noText))  // error: 'String?'
     _ = query.filter(NullabilityRowModel.requiredText.in([noText]))  // error: '[String?]'
     _ = query.filter(NullabilityRowModel.requiredText.notIn([noText]))  // error: '[String?]'
-    // Waits for slice 15: `NullabilityRowModel.requiredText.lowercased() == noText`.
+    _ = query.filter(NullabilityRowModel.requiredText.lowercased() == noText)  // error: 'String?'
 }

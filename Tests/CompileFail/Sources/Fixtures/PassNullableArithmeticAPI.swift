@@ -225,7 +225,7 @@ private func divisionPromotesAndPropagatesNull() {
     let _: Expr<Int32> = R.requiredI32 / Int16(2)
     let _: Expr<Double> = Double(1) / R.requiredI64
     let _: Expr<Double?> = Float(1) / R.nullableI32
-    // Waits for slice 15: `SQL.power(2.0, 3) / R.requiredI64` is `Expr<Double>`.
+    let _: Expr<Double> = SQL.power(2.0, 3) / R.requiredI64
     let _: Expr<Double?> = SQL.sum(R.requiredI32) / R.requiredF64
 }
 
@@ -247,8 +247,24 @@ private func castsToDoubleKeepNullability() {
     let _: Expr<Double> = R.requiredI32.cast(to: Double.self) / R.requiredI64
     let _: Expr<Double?> = R.nullableI32.cast(to: Double.self) / R.requiredI64
 
-    // Waits for slice 15: `SQL.power` is `Expr<Double>` on required operands and `Expr<Double?>` when one is nullable,
-    // for each numeric type.
+    // `POWER` is `double precision` for any numbers but two `Decimal`s, which give `numeric`. A nullable operand makes
+    // it nullable.
+    let _: Expr<Double> = SQL.power(R.requiredF64, 2.0)
+    let _: Expr<Double> = SQL.power(R.requiredI16, Int16(2))
+    let _: Expr<Double> = SQL.power(R.requiredI32, R.requiredI64)
+    let _: Expr<Double> = SQL.power(R.requiredF32, R.requiredI32)
+    let _: Expr<Double> = SQL.power(R.requiredInt, 2)
+    let _: Expr<Double?> = SQL.power(R.nullableI16, Int16(2))
+    let _: Expr<Double?> = SQL.power(R.nullableI32, Int32(2))
+    let _: Expr<Double?> = SQL.power(R.nullableI64, Int64(2))
+    let _: Expr<Double?> = SQL.power(R.nullableF32, Float(2))
+    let _: Expr<Double?> = SQL.power(R.nullableF64, 2.0)
+    let _: Expr<Double?> = SQL.power(R.requiredI32, R.nullableI32)
+    let _: Expr<Double?> = SQL.power(R.nullableI32, R.nullableI32)
+    let _: Expr<Decimal> = SQL.power(R.requiredDecimal, R.requiredDecimal)
+    let _: Expr<Decimal> = SQL.power(R.requiredDecimal, 2)
+    let _: Expr<Decimal?> = SQL.power(R.nullableDecimal, R.requiredDecimal)
+    let _: Expr<Decimal?> = SQL.power(R.requiredDecimal, R.nullableDecimal)
 
     // Interval constructors keep their input's nullability. Seconds take every integer width and fractions.
     let _: Expr<Interval> = SQL.interval(hours: R.requiredI32)
@@ -287,6 +303,7 @@ private func comparisonsOnNullableArithmeticAreNullable() {
     let _: Expr<Bool?> = R.nullableI32 < requiredRHS
     let _: Expr<Bool?> = R.nullableI32 >= nullableRHS
     let _: Expr<Bool> = R.requiredI32 < (R.nullableI32 ?? 0)
+    let _: Expr<Bool> = R.requiredI32 < SQL.coalesce(R.nullableI32, 0)
 
     // Timestamp arithmetic is NULL when the timestamp, the interval or both are.
     let _: Expr<Date?> = R.nullableDate + R.requiredInterval
@@ -300,6 +317,13 @@ private func comparisonsOnNullableArithmeticAreNullable() {
     let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
     let _: Expr<Date?> = timestamp + SQL.interval(hours: R.nullableI32)
     let _: Expr<Date?> = timestamp - SQL.interval(hours: R.nullableI32)
+
+    // `DATE_TRUNC` keeps the timestamp's nullability, and `NOW()` is a required timestamp.
+    let _: Expr<Date> = SQL.dateTrunc(.hour, R.requiredDate)
+    let _: Expr<Date?> = SQL.dateTrunc(.hour, R.nullableDate)
+    let _: Expr<Date?> = SQL.dateTrunc(.day, R.requiredDate + R.nullableInterval)
+    let _: Expr<Date> = SQL.now()
+    let _: Expr<Date> = SQL.dateTrunc(.day, SQL.now() - R.requiredInterval)
 
     _ = R.query()
         .filter(100 - R.nullableI32 > 50)

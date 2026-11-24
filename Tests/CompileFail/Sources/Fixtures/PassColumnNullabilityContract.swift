@@ -68,8 +68,36 @@ private func valueComparisonsFollowTheColumn() {
     let _: Expr<Bool> = NullabilityRowModel.nullableText.isNull
     let _: Expr<Bool> = NullabilityRowModel.nullableText.isNotNull
 
-    // Waits for slice 15: `lowercased()` keeping nullability, comparisons on it, `SQL.coalesce`, `SQL.greatest` and
-    // `SQL.least` (a required argument makes them required).
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased() == text
+    let _: Expr<String> = NullabilityRowModel.requiredText.lowercased()
+    let _: Expr<String?> = NullabilityRowModel.nullableText.lowercased()
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased() == "present"
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased() == nil
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased() != "present"
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased().like("pre%")
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased().ilike("PRE%")
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased().in(["present", "other"])
+    let _: Expr<String> = SQL.coalesce(NullabilityRowModel.nullableText, "fallback")
+    let _: Expr<String> = SQL.coalesce(NullabilityRowModel.requiredText, NullabilityRowModel.nullableText)
+    let _: Expr<String?> = SQL.coalesce(NullabilityRowModel.nullableText, NullabilityRowModel.nullableText)
+    let _: Expr<String> = SQL.coalesce(NullabilityRowModel.requiredText, NullabilityRowModel.requiredText)
+    let _: Expr<String> = SQL.coalesce(NullabilityRowModel.nullableText, NullabilityRowModel.requiredText)
+
+    // PostgreSQL's GREATEST and LEAST ignore NULL arguments, so one required argument makes the result required.
+    let _: Expr<Int32> = SQL.greatest(NullabilityRowModel.requiredCount, NullabilityRowModel.requiredCount)
+    let _: Expr<Int32> = SQL.least(NullabilityRowModel.requiredCount, NullabilityRowModel.requiredCount)
+    let _: Expr<Int32> = SQL.greatest(NullabilityRowModel.nullableCount, 0)
+    let _: Expr<Int32> = SQL.greatest(0, NullabilityRowModel.nullableCount)
+    let _: Expr<Int32> = SQL.least(NullabilityRowModel.nullableCount, 100)
+    let _: Expr<Int32> = SQL.least(100, NullabilityRowModel.nullableCount)
+    let _: Expr<Int32> = SQL.greatest(NullabilityRowModel.nullableCount, NullabilityRowModel.requiredCount)
+    let _: Expr<Int32> = SQL.greatest(NullabilityRowModel.requiredCount, NullabilityRowModel.nullableCount)
+    let _: Expr<Int32> = SQL.least(NullabilityRowModel.requiredCount, NullabilityRowModel.nullableCount)
+    let _: Expr<Int32> = SQL.least(NullabilityRowModel.nullableCount, NullabilityRowModel.requiredCount)
+    let _: Expr<Int32?> = SQL.greatest(NullabilityRowModel.nullableCount, NullabilityRowModel.nullableLimit)
+    let _: Expr<Int32?> = SQL.least(NullabilityRowModel.nullableCount, NullabilityRowModel.nullableLimit)
+    let _: Expr<String> = SQL.greatest(NullabilityRowModel.nullableText, "fallback")
+    let _: Expr<String?> = SQL.least(NullabilityRowModel.nullableText, NullabilityRowModel.nullableText)
 
     // Arithmetic on a nullable column is nullable, and so are comparisons on it.
     let nullableSum = NullabilityRowModel.nullableCount + NullabilityRowModel.requiredCount
@@ -139,7 +167,8 @@ private func columnComparisonsAreNullableWhenEitherColumnIs() {
         .filter(nullableComparison && NullabilityRowModel.id > 0)
     _ = NullabilityRowModel.update().set(NullabilityRowModel.requiredText, to: "updated").filter(nullableComparison)
     _ = NullabilityRowModel.delete().filter(nullableComparison)
-    // Waits for slice 15: `lowercased()` of a required column compared with a nullable one and the reverse, `Expr<Bool?>`.
+    let _: Expr<Bool?> = NullabilityRowModel.requiredText.lowercased() == NullabilityRowModel.nullableText
+    let _: Expr<Bool?> = NullabilityRowModel.nullableText.lowercased() == NullabilityRowModel.requiredText
 
     let nullableSum = NullabilityRowModel.nullableCount + NullabilityRowModel.requiredCount
     let _: Expr<Bool?> = nullableSum == NullabilityRowModel.requiredCount
