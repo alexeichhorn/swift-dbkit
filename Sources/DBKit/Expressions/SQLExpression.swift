@@ -48,4 +48,15 @@ public struct OrderBy: Sendable {
 extension SQLExpression {
     public var asc: OrderBy { OrderBy(node: sqlNode, descending: false) }
     public var desc: OrderBy { OrderBy(node: sqlNode, descending: true) }
+
+    /// Names a projected expression: `SELECT expr AS "alias"`.
+    public func `as`(_ alias: String) -> Aliased<Value> {
+        Aliased(node: sqlNode, alias: alias)
+    }
+}
+
+/// A projected expression with a column alias.
+public struct Aliased<Value: SQLType>: Sendable {
+    let node: SQLNode
+    let alias: String
 }

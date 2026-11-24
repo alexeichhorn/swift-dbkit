@@ -47,3 +47,13 @@ public macro Index() = #externalMacro(module: "DBKitMacros", type: "MarkerMacro"
 /// Overrides the column name, e.g. `@ColumnName("type") var kind: String`.
 @attached(peer)
 public macro ColumnName(_ name: String) = #externalMacro(module: "DBKitMacros", type: "MarkerMacro")
+
+/// Makes a struct the typed result of a `SELECT`. Generates `columns(…)` with one labelled parameter per stored
+/// property, each taking the SQL expression for it, so a missing column, a misspelled name and a wrong type are
+/// compile errors:
+/// `.select(Contact.columns(name: UserModel.name, isUS: UserModel.region == "us"))`.
+///
+/// The struct must be `Sendable` and keep its memberwise initializer, and every stored property needs a type
+/// annotation. A public struct has to declare `Sendable` itself.
+@attached(member, names: named(columns))
+public macro Projection() = #externalMacro(module: "DBKitMacros", type: "ProjectionMacro")

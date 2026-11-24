@@ -4,7 +4,7 @@ import SwiftSyntaxMacros
 
 @main
 struct DBKitMacrosPlugin: CompilerPlugin {
-    let providingMacros: [any Macro.Type] = [ModelMacro.self, MarkerMacro.self, ColumnMacro.self]
+    let providingMacros: [any Macro.Type] = [ModelMacro.self, MarkerMacro.self, ColumnMacro.self, ProjectionMacro.self]
 }
 
 /// Field markers like `@Key` generate nothing themselves; `@Model` reads them.

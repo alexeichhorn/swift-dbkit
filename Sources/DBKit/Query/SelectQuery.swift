@@ -1,4 +1,4 @@
-/// Builder methods shared by `SELECT` queries.
+/// Builder methods shared by model queries (``Query``) and projections (``Projection``).
 public protocol SelectQuery: Sendable {
     var statement: SelectStatement { get set }
 }
