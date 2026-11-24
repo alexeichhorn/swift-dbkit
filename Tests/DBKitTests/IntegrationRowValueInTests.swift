@@ -3,7 +3,8 @@ import Foundation
 import Testing
 
 /// rust-dbkit's `lookup_rows` of `integration_row_value_in.rs`. Text stands in for its `scope` column of the enum
-/// `lookup_scope`, with the enum's labels; the kit's `tasks` test brings row values over enum columns in slice 26.
+/// `lookup_scope`, with the enum's labels; the `tasks` part of `IntegrationTests.postgresTypesAggregatesAndFunctions`
+/// runs a row value over an enum column.
 @Model(table: "lookup_rows")
 class LookupRowModel {
     @Key @AutoIncrement var id: Int64

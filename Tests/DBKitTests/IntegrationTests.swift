@@ -1054,8 +1054,59 @@ private func teamNames(of player: PlayerModel.WithTeamAndFormerTeam) -> [String?
                 .filter(SaleModel.region == "us")
                 .first(on: tx)
             #expect(text?.0 == "us-x" && text?.1 == "Us" && text?.2 == "b" && text?.3 == "US")
-            // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update,
-            // `SQL.row(TaskModel.state, TaskModel.title).in(…)` over the enum column, and `deliveries`.
+
+            try await tx.query("CREATE TYPE pg_temp.task_state AS ENUM ('pending_review', 'in_progress', 'completed')")
+            try await tx.query("CREATE TYPE pg_temp.delivery_state AS ENUM ('in_transit', 'delivered')")
+            try await tx.query(
+                """
+                CREATE TEMP TABLE tasks (
+                    id BIGSERIAL PRIMARY KEY, project_id BIGINT NOT NULL, title TEXT NOT NULL, state task_state NOT NULL,
+                    previous_state task_state, attempts INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """)
+            try await tx.query("CREATE TEMP TABLE deliveries (id BIGSERIAL PRIMARY KEY, state delivery_state NOT NULL)")
+            // Waits for slice 28: `updatedAt: Date(timeIntervalSince1970: 0)` on the second row, and reading both rows back
+            // to check that `nil` writes DEFAULT per row, next to an explicit value in the same multi-row insert.
+            try await TaskModel.insert([
+                TaskModel.Insert(projectID: 1, title: "t", state: .pendingReview, previousState: nil),
+                TaskModel.Insert(projectID: 1, title: "old", state: .completed, previousState: nil),
+            ]).execute(on: tx)
+            let task = try await TaskModel.update().set(TaskModel.state, to: .completed).set(TaskModel.previousState, to: .pendingReview)
+                .filter(TaskModel.state.in([.pendingReview, .inProgress])).returningAll().first(on: tx)
+            #expect(task?.state == .completed && task?.previousState == .pendingReview)
+            let rows = try await TaskModel.query().filter(SQL.row(TaskModel.state, TaskModel.title).in([(.completed, "t")])).all(on: tx)
+            #expect(rows.count == 1)
+
+            try await DeliveryModel.insert(DeliveryModel.Insert(state: .inTransit)).execute(on: tx)
+            let delivery = try await DeliveryModel.query().filter(DeliveryModel.state == .inTransit).first(on: tx)
+            #expect(delivery?.state == .inTransit)
+            for try await label in try await tx.query("SELECT state::text FROM deliveries").decode(String.self) {
+                #expect(label == "in_transit")
+            }
+        }
+    }
+
+    /// An enum column decodes in a projection grouped by it, ordered as the type declares its labels. A label the Swift
+    /// enum lacks fails to decode.
+    @Test func enumProjectionsGroupByLabelAndUnknownLabelsFailToDecode() async throws {
+        try await withRollback { tx in
+            try await tx.query("CREATE TYPE pg_temp.delivery_state AS ENUM ('in_transit', 'delivered', 'lost')")
+            try await tx.query("CREATE TEMP TABLE deliveries (id BIGSERIAL PRIMARY KEY, state delivery_state NOT NULL)")
+            try await DeliveryModel.insert([
+                DeliveryModel.Insert(state: .delivered), DeliveryModel.Insert(state: .inTransit), DeliveryModel.Insert(state: .delivered),
+            ]).execute(on: tx)
+
+            let counts = try await DeliveryModel.query()
+                .select(DeliveryModel.state, SQL.count(DeliveryModel.id))
+                .groupBy(DeliveryModel.state)
+                .orderBy(DeliveryModel.state.asc)
+                .all(on: tx)
+            #expect(counts.map { $0.0 } == [.inTransit, .delivered] && counts.map { $0.1 } == [1, 2])
+
+            try await tx.query("INSERT INTO deliveries (state) VALUES ('lost')")
+            await #expect(throws: DBKitError.decodingFailed(column: "state", type: "DeliveryState")) {
+                try await DeliveryModel.query().all(on: tx)
+            }
         }
     }
 

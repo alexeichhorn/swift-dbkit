@@ -116,13 +116,30 @@ class TextSampleModel {
     var body: String?
 }
 
-/// The kit's `tasks`. Waits for slice 26: `var state: TaskState` and `var previousState: TaskState?`. Waits for slice
-/// 28: `@DatabaseDefault var updatedAt: Date`.
+enum TaskState: String, DatabaseEnum {
+    static let typeName = "task_state"
+    case pendingReview = "pending_review"
+    case inProgress = "in_progress"
+    case completed
+}
+
+@DatabaseEnum("delivery_state")
+enum DeliveryState { case inTransit, delivered }
+
+@Model(table: "deliveries")
+class DeliveryModel {
+    @Key @AutoIncrement var id: Int64
+    var state: DeliveryState
+}
+
+/// The kit's `tasks`. Waits for slice 28: `@DatabaseDefault var updatedAt: Date`.
 @Model(table: "tasks")
 class TaskModel {
     @Key @AutoIncrement var id: Int64
     var projectID: Int64
     var title: String
+    var state: TaskState
+    var previousState: TaskState?
     var attempts: Int32 = 0
 }
 

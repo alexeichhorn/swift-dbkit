@@ -288,7 +288,17 @@ class LeaseModel {
                 == #"SELECT "projects".* FROM "projects" WHERE EXISTS (SELECT "tasks"."id" FROM "tasks" WHERE "tasks"."project_id" = "projects"."id")"#
         )
         #expect(correlated.binds.isEmpty)
-        // Waits for slice 26: `&& TaskModel.state == .inProgress` in the subquery's filter, bound as `$1::task_state`.
+        let inProgress = ProjectModel.query()
+            .whereExists(
+                TaskModel.query().select(TaskModel.id).filter(TaskModel.projectID == ProjectModel.id && TaskModel.state == .inProgress)
+            )
+            .filter(Condition.all)
+            .render()
+        #expect(
+            inProgress.sql
+                == #"SELECT "projects".* FROM "projects" WHERE EXISTS (SELECT "tasks"."id" FROM "tasks" WHERE ("tasks"."project_id" = "projects"."id" AND "tasks"."state" = $1::task_state))"#
+        )
+        #expect(inProgress.binds.map(\.description) == ["inProgress"])
         #expect(UserModel.query().filter(Condition.all).render().sql == #"SELECT "users".* FROM "users""#)
         let rendered = UserModel.query().filter(condition).render()
         #expect(
@@ -370,19 +380,43 @@ class LeaseModel {
         #expect(rendered.binds.map(\.description) == ["us", "milk", "3", "Sam"])
     }
 
-    /// `TodoModel` stands in for the kit's `TaskModel`, whose enum columns arrive in slice 26.
     @Test func rowValuesEnumsAndColumnComparisons() {
         let rendered = TodoModel.query()
             .filter(TodoModel.note.isDistinct(from: TodoModel.title))
             .render()
         #expect(rendered.sql == #"SELECT "todos".* FROM "todos" WHERE "todos"."note" IS DISTINCT FROM "todos"."title""#)
         #expect(rendered.binds.isEmpty)
-        // Waits for slice 26: `SQL.row(TaskModel.state, TaskModel.title).in([(.pendingReview, "alpha"), (.completed, "beta")])`,
-        // `TaskModel.state.in([.inProgress])` and `TaskModel.previousState.isDistinct(from: TaskModel.state)`.
+        let enums = TaskModel.query()
+            .filter(SQL.row(TaskModel.state, TaskModel.title).in([(.pendingReview, "alpha"), (.completed, "beta")]))
+            .filter(TaskModel.state.in([.inProgress]))
+            .filter(TaskModel.previousState.isDistinct(from: TaskModel.state))
+            .filter(TaskModel.attempts + 1 < TaskModel.attempts * 2)
+            .render()
+        #expect(
+            enums.sql
+                == #"SELECT "tasks".* FROM "tasks" WHERE ("tasks"."state", "tasks"."title") IN (($1::task_state, $2), ($3::task_state, $4)) AND "tasks"."state" IN ($5::task_state) AND "tasks"."previous_state" IS DISTINCT FROM "tasks"."state" AND ("tasks"."attempts" + $6) < ("tasks"."attempts" * $7)"#
+        )
+        #expect(enums.binds.map(\.description) == ["pendingReview", "alpha", "completed", "beta", "inProgress", "1", "2"])
 
         let arithmetic = TaskModel.query().filter(TaskModel.attempts + 1 < TaskModel.attempts * 2).render()
         #expect(arithmetic.sql == #"SELECT "tasks".* FROM "tasks" WHERE ("tasks"."attempts" + $1) < ("tasks"."attempts" * $2)"#)
         #expect(arithmetic.binds.map(\.description) == ["1", "2"])
+    }
+
+    /// An enum column is selected, grouped by and compared like any other column, with each bind cast to its type.
+    @Test func enumColumnsInProjectionsGroupingAndFilters() {
+        let query: Projection<TaskState, Int64> = TaskModel.query()
+            .select(TaskModel.state, SQL.count(TaskModel.id))
+            .filter(TaskModel.state != .completed)
+            .filter(TaskModel.state.notIn([.pendingReview]))
+            .filter(TaskModel.previousState.isDistinct(from: .inProgress))
+            .groupBy(TaskModel.state)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "tasks"."state", COUNT("tasks"."id") FROM "tasks" WHERE "tasks"."state" <> $1::task_state AND "tasks"."state" NOT IN ($2::task_state) AND "tasks"."previous_state" IS DISTINCT FROM $3::task_state GROUP BY "tasks"."state""#
+        )
+        #expect(rendered.binds.map(\.description) == ["completed", "pendingReview", "inProgress"])
     }
 
     /// The NULL-safe comparisons are never NULL, on either nullability and against values, `nil` and columns.
@@ -686,7 +720,17 @@ class LeaseModel {
             .render()
         #expect(update.sql == #"UPDATE "tasks" SET "attempts" = ("tasks"."attempts" + $1) WHERE "tasks"."id" = $2"#)
         #expect(update.binds.map(\.description) == ["1", "42"])
-        // Waits for slice 26: the same update also setting the enum `state` to `.completed` and `previousState` to `nil`.
+        let enumUpdate = TaskModel.update()
+            .set(TaskModel.state, to: .completed)
+            .set(TaskModel.previousState, to: nil)
+            .set(TaskModel.attempts, to: TaskModel.attempts + 1)
+            .filter(TaskModel.id == 42)
+            .render()
+        #expect(
+            enumUpdate.sql
+                == #"UPDATE "tasks" SET "state" = $1::task_state, "previous_state" = NULL, "attempts" = ("tasks"."attempts" + $2) WHERE "tasks"."id" = $3"#
+        )
+        #expect(enumUpdate.binds.map(\.description) == ["completed", "1", "42"])
         let delete = TaskModel.delete()
             .whereExists(ProjectModel.query().select(ProjectModel.id).filter(ProjectModel.id == TaskModel.projectID))
             .render()
