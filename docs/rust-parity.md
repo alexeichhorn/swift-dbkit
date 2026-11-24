@@ -20,6 +20,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - `Int16` shift counts besides `Int32`
 - Bitwise operators with one required and one nullable operand, a nullable shift count, and a value on the left
 - A timestamp plus or minus a nullable interval, giving a nullable timestamp
+- `SQL.sum` of intervals
 - Comparisons on nullable columns typed as `Bool?`
 - Row-value tuples take each column's own type, so integer literals, optional values and `nil` for nullable columns, and `SQL.row(…).in(…)` is `Bool?` when a column is nullable
 - Parentheses around a comparison used inside another comparison
@@ -55,6 +56,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - **Changing a key column on an active model.** The update filters by the key the row was loaded with, so assigning a primary key column moves the row to the new key. rust-dbkit never writes key columns and filters by the assigned key, so it reports the row as not found.
 - **Updating or deleting a new active model.** `update(on:)` and `delete(on:)` need a loaded row; calling them on `ActiveModel()` is a programmer error and traps. rust-dbkit returns an error when a key column is unset.
 - **Arithmetic result types.** They follow PostgreSQL. Arithmetic on two `smallint`s stays `Int16`, where rust-dbkit types it `Int32`, and `+`, `-` and `*` accept mixed numeric types, which rust-dbkit accepts only in `/`.
+- **`SUM` result types.** They follow PostgreSQL: a sum of `Int16` or `Int32` is `Int64?`, and of `Int64` is `Decimal?`, since PostgreSQL sums `bigint` as `numeric`. rust-dbkit types a sum as its input type, though its integration tests decode `bigint` sums as `BigDecimal`.
 - **Interval units.** `SQL.interval(days:|hours:|minutes:)` takes any numeric type, such as `SQL.interval(hours: 1.5)`, where rust-dbkit takes only 32-bit integers. rust-dbkit renders PostgreSQL's `MAKE_INTERVAL`, which takes integers for these units; this port renders `(x * INTERVAL '1 hour')`, which PostgreSQL defines for any number.
 - **A condition's predicate.** `Condition.all` and `.any` take `Bool` and `Bool?` predicates, and `predicate` is always `Expr<Bool?>`. rust-dbkit keeps it `bool` until a nullable predicate is added, but Swift can't change a variable's type when `add(_:)` mutates it.
 - **Repeated values.** Every occurrence of a value gets its own bind. rust-dbkit binds an identical value once and repeats its placeholder.

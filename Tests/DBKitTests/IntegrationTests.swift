@@ -414,7 +414,43 @@ class ValueRowModel {
                 .all(on: tx)
             #expect(masked.count == 1)
 
-            // Waits for slice 14b: the `sales` totals per region, as `Decodable` rows, as a `@Projection` and as a tuple.
+            try await tx.query(
+                "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL)"
+            )
+            try await tx.query(
+                "INSERT INTO sales (region, amount, created_at) VALUES ('us', 10, now()), ('us', 5, now()), ('eu', 7, now())")
+            struct RegionTotal: Decodable {
+                let region: String
+                let total: Decimal?
+                let saleCount: Int64
+            }
+            let totals = try await SaleModel.query()
+                .select(SaleModel.region.as("region"), SQL.sum(SaleModel.amount).as("total"), SQL.count(SaleModel.id).as("sale_count"))
+                .groupBy(SaleModel.region)
+                .orderBy(SaleModel.region.asc)
+                .all(as: RegionTotal.self, on: tx)
+            #expect(totals.map(\.region) == ["eu", "us"] && totals[1].total == 15 && totals[1].saleCount == 2)
+
+            // The same rows through a projection whose columns are named in code.
+            @Projection struct RegionCount {
+                let region: String
+                let saleCount: Int64
+                let largest: Int64?
+            }
+            let counts = try await SaleModel.query()
+                .select(
+                    RegionCount.columns(region: SaleModel.region, saleCount: SQL.count(SaleModel.id), largest: SQL.max(SaleModel.amount))
+                )
+                .groupBy(SaleModel.region)
+                .orderBy(SaleModel.region.asc)
+                .all(on: tx)
+            #expect(counts.map(\.region) == ["eu", "us"] && counts[1].saleCount == 2 && counts[1].largest == 10)
+
+            let summary = try await SaleModel.query()
+                .select(SQL.count(SaleModel.id), SQL.count(SaleModel.id).filter(SaleModel.region == "us"), SQL.max(SaleModel.amount))
+                .first(on: tx)
+            #expect(summary?.0 == 3 && summary?.1 == 2 && summary?.2 == 10)
+
             // Waits for slice 16: the string functions on `sales`.
             // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update,
             // `SQL.row(TaskModel.state, TaskModel.title).in(…)` over the enum column, and `deliveries`.

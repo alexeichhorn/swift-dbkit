@@ -40,3 +40,11 @@ class LookupItemModel {
     var locale: String
     var optionalLocale: String?
 }
+
+/// rust-dbkit's `Sale` of the `fail_filter_*` fixtures.
+@Model(table: "sales")
+class SaleModel {
+    @Key var id: Int64
+    var region: String
+    var amount: Int64
+}

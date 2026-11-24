@@ -19,6 +19,16 @@ class CompilerCompactRowModel {
     var rightUnits: Int16
 }
 
+/// The `text_samples` table of rust-dbkit's `sql_compiler.rs`, with nullable `body` and `optional_width`.
+@Model(table: "text_samples")
+class CompilerTextSampleModel {
+    @Key var id: Int64
+    var body: String?
+    var title: String
+    var width: Int32
+    var optionalWidth: Int32?
+}
+
 /// The `window_rows` table of rust-dbkit's `sql_compiler.rs`. `Date` stands in for its `timestamp` column.
 @Model(table: "window_rows")
 class CompilerWindowRowModel {
@@ -336,8 +346,126 @@ class CompilerWindowRowModel {
                 == #"SELECT CAST("users"."score" AS double precision) AS "score", CAST(("users"."score" + $1) AS double precision) AS "adjusted_score" FROM "users""#
         )
         #expect(users.binds.map(\.description) == ["5"])
-        // Waits for slice 14b: `SQL.sum(SaleModel.amount).cast(to: Double.self)` is `Expr<Double?>` and renders
-        // `SELECT CAST(SUM("sales"."amount") AS double precision) AS "total" FROM "sales"`.
+
+        let aggregate: Expr<Double?> = SQL.sum(SaleModel.amount).cast(to: Double.self)
+        let sales = SaleModel.query().select(aggregate.as("total")).render()
+        #expect(sales.sql == #"SELECT CAST(SUM("sales"."amount") AS double precision) AS "total" FROM "sales""#)
+        #expect(sales.binds.isEmpty)
+    }
+
+    @Test func compilesFilteredAggregateCastWithFilterInsideCast() {
+        let aggregate: Expr<Double?> = SQL.sum(SaleModel.amount).filter(SaleModel.region == "us").cast(to: Double.self)
+        let rendered = SaleModel.query().select(aggregate.as("total")).render()
+        #expect(
+            rendered.sql
+                == #"SELECT CAST(SUM("sales"."amount") FILTER (WHERE "sales"."region" = $1) AS double precision) AS "total" FROM "sales""#
+        )
+        #expect(rendered.binds.map(\.description) == ["us"])
+    }
+
+    /// rust-dbkit selects `email` without an alias, which `select` can't mix with aliased expressions, so it is aliased
+    /// `email`.
+    @Test func compilesGroupByAndHaving() {
+        let query: Projection<String?, Int64> = CompilerUserModel.query()
+            .select(CompilerUserModel.email.as("email"), SQL.count(CompilerUserModel.id).as("cnt"))
+            .groupBy(CompilerUserModel.email)
+            .having(SQL.count(CompilerUserModel.id) > 1)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "users"."email" AS "email", COUNT("users"."id") AS "cnt" FROM "users" GROUP BY "users"."email" HAVING COUNT("users"."id") > $1"#
+        )
+        #expect(rendered.binds.map(\.description) == ["1"])
+    }
+
+    @Test func compilesFilteredAggregateProjectionsWithoutGroupBy() {
+        let discountedUSSale: Expr<Bool> = SaleModel.region == "us" && SaleModel.amount <= 50
+        let query: Projection<Int64, Int64, Date?, Int64> = SaleModel.query()
+            .select(
+                SQL.count(SaleModel.id).as("active_sales"),
+                SQL.count(SaleModel.id).filter(discountedUSSale).as("discounted_us_sales"),
+                SQL.min(SaleModel.createdAt).filter(discountedUSSale).as("oldest_discounted_us_sale_at"),
+                SQL.count(SaleModel.id).filter(SaleModel.region == "missing").as("missing_sales")
+            )
+            .filter(SaleModel.amount > 0)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT COUNT("sales"."id") AS "active_sales", COUNT("sales"."id") FILTER (WHERE ("sales"."region" = $1 AND "sales"."amount" <= $2)) AS "discounted_us_sales", MIN("sales"."created_at") FILTER (WHERE ("sales"."region" = $3 AND "sales"."amount" <= $4)) AS "oldest_discounted_us_sale_at", COUNT("sales"."id") FILTER (WHERE "sales"."region" = $5) AS "missing_sales" FROM "sales" WHERE "sales"."amount" > $6"#
+        )
+        #expect(rendered.binds.map(\.description) == ["us", "50", "us", "50", "missing", "0"])
+    }
+
+    @Test func compilesFilteredAggregateInGroupedProjectionAndHaving() {
+        let query: Projection<String, Int64> = SaleModel.query()
+            .select(SaleModel.region.as("region"), SQL.count(SaleModel.id).filter(SaleModel.amount >= 50).as("large_sales"))
+            .groupBy(SaleModel.region)
+            .having(SQL.count(SaleModel.id).filter(SaleModel.amount >= 50) > 1)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "sales"."region" AS "region", COUNT("sales"."id") FILTER (WHERE "sales"."amount" >= $1) AS "large_sales" FROM "sales" GROUP BY "sales"."region" HAVING COUNT("sales"."id") FILTER (WHERE "sales"."amount" >= $2) > $3"#
+        )
+        #expect(rendered.binds.map(\.description) == ["50", "50", "1"])
+    }
+
+    /// `??` is rust-dbkit's `func::coalesce` here.
+    @Test func compilesScalarFunctionWrappingFilteredAggregate() {
+        let usTotal: Expr<Decimal> = SQL.sum(SaleModel.amount).filter(SaleModel.region == "us") ?? 0
+        let rendered = SaleModel.query().select(usTotal.as("us_total")).render()
+        #expect(
+            rendered.sql
+                == #"SELECT COALESCE(SUM("sales"."amount") FILTER (WHERE "sales"."region" = $1), $2) AS "us_total" FROM "sales""#
+        )
+        #expect(rendered.binds.map(\.description) == ["us", "0"])
+    }
+
+    /// PostgreSQL sums `bigint` as `numeric`, so the sums are `Decimal` where rust-dbkit types them `i64`. `??` is
+    /// rust-dbkit's `func::coalesce` here.
+    @Test func compilesNullableSumAndNonNullCoalesce() {
+        let total: AggregateExpr<Decimal?> = SQL.sum(SaleModel.amount)
+        let filteredTotal: Expr<Decimal?> = SQL.sum(SaleModel.amount).filter(SaleModel.region == "us")
+        let guaranteedTotal: Expr<Decimal> = SQL.sum(SaleModel.amount) ?? 0
+        let query: Projection<Decimal?, Decimal?, Decimal> = SaleModel.query()
+            .select(total.as("total"), filteredTotal.as("filtered_total"), guaranteedTotal.as("guaranteed_total"))
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT SUM("sales"."amount") AS "total", SUM("sales"."amount") FILTER (WHERE "sales"."region" = $1) AS "filtered_total", COALESCE(SUM("sales"."amount"), $2) AS "guaranteed_total" FROM "sales""#
+        )
+        #expect(rendered.binds.map(\.description) == ["us", "0"])
+    }
+
+    @Test func compilesMinMaxAggregateProjections() {
+        let query: Projection<String, Date?, Date?, Int64?, Int64?> = SaleModel.query()
+            .select(
+                SaleModel.region.as("region"),
+                SQL.min(SaleModel.createdAt).as("first_sale_at"),
+                SQL.max(SaleModel.createdAt).as("last_sale_at"),
+                SQL.min(SaleModel.amount).as("min_amount"),
+                SQL.max(SaleModel.amount).as("max_amount")
+            )
+            .groupBy(SaleModel.region)
+            .having(SQL.max(SaleModel.amount) > 100)
+            .orderBy(SQL.min(SaleModel.createdAt).asc)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT "sales"."region" AS "region", MIN("sales"."created_at") AS "first_sale_at", MAX("sales"."created_at") AS "last_sale_at", MIN("sales"."amount") AS "min_amount", MAX("sales"."amount") AS "max_amount" FROM "sales" GROUP BY "sales"."region" HAVING MAX("sales"."amount") > $1 ORDER BY MIN("sales"."created_at") ASC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["100"])
+    }
+
+    @Test func compilesMinMaxForNullableTextWithoutNestedOptionType() {
+        let minBody: AggregateExpr<String?> = SQL.min(CompilerTextSampleModel.body)
+        let maxBody: AggregateExpr<String?> = SQL.max(CompilerTextSampleModel.body)
+        let query: Projection<String?, String?> = CompilerTextSampleModel.query().select(minBody.as("min_body"), maxBody.as("max_body"))
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT MIN("text_samples"."body") AS "min_body", MAX("text_samples"."body") AS "max_body" FROM "text_samples""#
+        )
+        #expect(rendered.binds.isEmpty)
     }
 
     @Test func compilesArithmeticExpressionInProjectionAndOrdering() {

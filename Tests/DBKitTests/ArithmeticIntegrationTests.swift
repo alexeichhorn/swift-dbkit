@@ -182,6 +182,36 @@ class MixedNumberModel {
         }
     }
 
+    /// `SUM` decodes as the type PostgreSQL returns: `bigint` for `smallint` and `integer`, `numeric` for `bigint`, and
+    /// the input type for `real` and `double precision`. Each integer sum here exceeds its input type. Without input rows
+    /// every sum is NULL.
+    @Test func sumsDecodeAsThePostgreSQLResultType() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let row = MixedNumberModel.Insert(
+                small: 30_000, medium: 2_000_000_000, large: 9_000_000_000_000_000_000, fraction: 0.5, ratio: 0.25)
+            try await MixedNumberModel.insert([row, row]).execute(on: tx)
+
+            let query = MixedNumberModel.query()
+                .select(
+                    SQL.sum(MixedNumberModel.small),
+                    SQL.sum(MixedNumberModel.medium),
+                    SQL.sum(MixedNumberModel.large),
+                    SQL.sum(MixedNumberModel.fraction),
+                    SQL.sum(MixedNumberModel.ratio)
+                )
+            let sums: (Int64?, Int64?, Decimal?, Float?, Double?) = try #require(try await query.first(on: tx))
+            #expect(sums.0 == 60_000)
+            #expect(sums.1 == 4_000_000_000)
+            #expect(sums.2 == Decimal(string: "18000000000000000000"))
+            #expect(sums.3 == 1)
+            #expect(sums.4 == 0.5)
+
+            let empty = try #require(try await query.filter(MixedNumberModel.id < 0).first(on: tx))
+            #expect(empty.0 == nil && empty.1 == nil && empty.2 == nil && empty.3 == nil && empty.4 == nil)
+        }
+    }
+
     @Test func nullableArithmeticPropagatesNullFromEitherOperand() async throws {
         try await withRollback { tx in
             try await setupSchema(on: tx)

@@ -726,6 +726,240 @@ import Testing
             #expect(matching.first?.note == "middle")
         }
     }
+
+    /// rust-dbkit's `FromRow` structs are `Decodable` structs here, matched by alias.
+    @Test func filteredAggregatesRoundtripWithoutGroupBy() async throws {
+        struct FilteredSaleAggregate: Decodable {
+            let activeSales: Int64
+            let usSales: Int64
+            let largeUSSales: Int64
+            let missingSales: Int64
+            let oldestLargeUSSaleAt: Date?
+            let oldestMissingSaleAt: Date?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let oldestLargeUSSaleAt = isoDate("2024-02-01T12:00:00Z")
+            try await SaleModel.insert([
+                SaleModel.Insert(region: "us", amount: 40, createdAt: isoDate("2024-02-01T10:00:00Z")),
+                SaleModel.Insert(region: "us", amount: 70, createdAt: oldestLargeUSSaleAt),
+                SaleModel.Insert(region: "eu", amount: 30, createdAt: isoDate("2024-02-01T14:00:00Z")),
+                SaleModel.Insert(region: "apac", amount: 200, createdAt: isoDate("2024-02-02T09:00:00Z")),
+                SaleModel.Insert(region: "us", amount: 0, createdAt: isoDate("2024-02-01T08:00:00Z")),
+            ])
+            .execute(on: tx)
+
+            let largeUSSale: Expr<Bool> = SaleModel.region == "us" && SaleModel.amount >= 50
+            let aggregate = try #require(
+                try await SaleModel.query()
+                    .select(
+                        SQL.count(SaleModel.id).as("active_sales"),
+                        SQL.count(SaleModel.id).filter(SaleModel.region == "us").as("us_sales"),
+                        SQL.count(SaleModel.id).filter(largeUSSale).as("large_us_sales"),
+                        SQL.count(SaleModel.id).filter(SaleModel.region == "missing").as("missing_sales"),
+                        SQL.min(SaleModel.createdAt).filter(largeUSSale).as("oldest_large_us_sale_at"),
+                        SQL.min(SaleModel.createdAt).filter(SaleModel.region == "missing").as("oldest_missing_sale_at")
+                    )
+                    .filter(SaleModel.amount > 0)
+                    .first(as: FilteredSaleAggregate.self, on: tx))
+
+            #expect(aggregate.activeSales == 4)
+            #expect(aggregate.usSales == 2)
+            #expect(aggregate.largeUSSales == 1)
+            #expect(aggregate.missingSales == 0)
+            #expect(aggregate.oldestLargeUSSaleAt == oldestLargeUSSaleAt)
+            #expect(aggregate.oldestMissingSaleAt == nil)
+        }
+    }
+
+    /// A `bigint` sum is `numeric`, so `total` is `Decimal?`.
+    @Test func filteredAggregatesHandleEmptyAndNullableInputs() async throws {
+        struct EmptySumAggregate: Decodable {
+            let total: Decimal?
+        }
+        struct EmptyFilteredSaleAggregate: Decodable {
+            let matchingSales: Int64
+            let oldestMatchingSaleAt: Date?
+        }
+        struct FilteredNullableAggregate: Decodable {
+            let allRows: Int64
+            let nullRows: Int64
+            let nonNullNotes: Int64
+            let firstNullNote: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+
+            let emptySum = try #require(
+                try await SaleModel.query().select(SQL.sum(SaleModel.amount).as("total")).first(as: EmptySumAggregate.self, on: tx))
+            #expect(emptySum.total == nil)
+
+            let empty = try #require(
+                try await SaleModel.query()
+                    .select(
+                        SQL.count(SaleModel.id).filter(SaleModel.region == "us").as("matching_sales"),
+                        SQL.min(SaleModel.createdAt).filter(SaleModel.region == "us").as("oldest_matching_sale_at")
+                    )
+                    .first(as: EmptyFilteredSaleAggregate.self, on: tx))
+            #expect(empty.matchingSales == 0)
+            #expect(empty.oldestMatchingSaleAt == nil)
+
+            _ = try await seedNullableRow(on: tx, note: nil)
+            _ = try await seedNullableRow(on: tx, note: "gamma")
+            _ = try await seedNullableRow(on: tx, note: "alpha")
+
+            let nullable = try #require(
+                try await NullableRowModel.query()
+                    .select(
+                        SQL.count(NullableRowModel.id).as("all_rows"),
+                        SQL.count(NullableRowModel.id).filter(NullableRowModel.note.isNull).as("null_rows"),
+                        SQL.count(NullableRowModel.note).filter(NullableRowModel.id > 0).as("non_null_notes"),
+                        SQL.min(NullableRowModel.note).filter(NullableRowModel.note.isNull).as("first_null_note")
+                    )
+                    .first(as: FilteredNullableAggregate.self, on: tx))
+            #expect(nullable.allRows == 3)
+            #expect(nullable.nullRows == 1)
+            #expect(nullable.nonNullNotes == 2)
+            #expect(nullable.firstNullNote == nil)
+        }
+    }
+
+    /// A `bigint` sum is `numeric`, so `total` is `Decimal?`. rust-dbkit decodes the grouped minimums and maximums as
+    /// required values, which these rows always have, and so do these structs.
+    @Test func aggregationAndGroupByRoundtrip() async throws {
+        struct RegionAggregate: Decodable {
+            let region: String
+            let total: Decimal?
+            let count: Int64
+        }
+        struct SaleExtremaAggregate: Decodable {
+            let region: String
+            let firstSaleAt: Date
+            let lastSaleAt: Date
+            let minAmount: Int64
+            let maxAmount: Int64
+        }
+        struct EmptySaleExtremaAggregate: Decodable {
+            let firstSaleAt: Date?
+            let lastSaleAt: Date?
+            let minAmount: Int64?
+            let maxAmount: Int64?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let inserted = try await SaleModel.insert([
+                SaleModel.Insert(region: "us", amount: 40, createdAt: isoDate("2024-02-01T10:00:00Z")),
+                SaleModel.Insert(region: "us", amount: 70, createdAt: isoDate("2024-02-01T12:00:00Z")),
+                SaleModel.Insert(region: "eu", amount: 30, createdAt: isoDate("2024-02-01T14:00:00Z")),
+                SaleModel.Insert(region: "apac", amount: 200, createdAt: isoDate("2024-02-02T09:00:00Z")),
+            ])
+            .execute(on: tx)
+            #expect(inserted == 4)
+
+            let amountBetween = try await SaleModel.query().filter(SaleModel.amount.between(40, 70)).orderBy(SaleModel.amount.asc).all(
+                on: tx)
+            #expect(amountBetween.map(\.amount) == [40, 70])
+
+            let day1Sales = try await SaleModel.query()
+                .filter(SaleModel.createdAt.between(isoDate("2024-02-01T00:00:00Z"), isoDate("2024-02-01T23:59:59Z")))
+                .all(on: tx)
+            #expect(day1Sales.count == 3)
+
+            let regionRows = try await SaleModel.query()
+                .select(SaleModel.region.as("region"), SQL.sum(SaleModel.amount).as("total"), SQL.count(SaleModel.id).as("count"))
+                .groupBy(SaleModel.region)
+                .orderBy(SaleModel.region.asc)
+                .having(SQL.sum(SaleModel.amount) > 100)
+                .all(as: RegionAggregate.self, on: tx)
+            #expect(regionRows.map(\.region) == ["apac", "us"])
+            #expect(regionRows.map(\.total) == [200, 110])
+            #expect(regionRows.map(\.count) == [1, 2])
+
+            // Waits for slice 15: the totals per `SQL.dateTrunc(.day, SaleModel.createdAt)` bucket, 140 on the first day
+            // and 200 on the second, once unordered and once ordered by the bucket descending.
+
+            // rust-dbkit orders by the select alias `total`, which is planned (#2); this orders by the aggregate itself.
+            let orderedRegions = try await SaleModel.query()
+                .select(SaleModel.region.as("region"), SQL.sum(SaleModel.amount).as("total"), SQL.count(SaleModel.id).as("count"))
+                .groupBy(SaleModel.region)
+                .orderBy(SQL.sum(SaleModel.amount).desc)
+                .all(as: RegionAggregate.self, on: tx)
+            #expect(orderedRegions.map(\.region) == ["apac", "us", "eu"])
+            #expect(orderedRegions.map(\.total) == [200, 110, 30])
+
+            let extremaRows = try await SaleModel.query()
+                .select(
+                    SaleModel.region.as("region"),
+                    SQL.min(SaleModel.createdAt).as("first_sale_at"),
+                    SQL.max(SaleModel.createdAt).as("last_sale_at"),
+                    SQL.min(SaleModel.amount).as("min_amount"),
+                    SQL.max(SaleModel.amount).as("max_amount")
+                )
+                .groupBy(SaleModel.region)
+                .orderBy(SaleModel.region.asc)
+                .all(as: SaleExtremaAggregate.self, on: tx)
+            try #require(extremaRows.count == 3)
+            #expect(extremaRows[0].region == "apac")
+            #expect(extremaRows[0].firstSaleAt == isoDate("2024-02-02T09:00:00Z"))
+            #expect(extremaRows[0].lastSaleAt == isoDate("2024-02-02T09:00:00Z"))
+            #expect(extremaRows[0].minAmount == 200)
+            #expect(extremaRows[0].maxAmount == 200)
+            #expect(extremaRows[2].region == "us")
+            #expect(extremaRows[2].firstSaleAt == isoDate("2024-02-01T10:00:00Z"))
+            #expect(extremaRows[2].lastSaleAt == isoDate("2024-02-01T12:00:00Z"))
+            #expect(extremaRows[2].minAmount == 40)
+            #expect(extremaRows[2].maxAmount == 70)
+
+            let emptyExtrema = try #require(
+                try await SaleModel.query()
+                    .select(
+                        SQL.min(SaleModel.createdAt).as("first_sale_at"),
+                        SQL.max(SaleModel.createdAt).as("last_sale_at"),
+                        SQL.min(SaleModel.amount).as("min_amount"),
+                        SQL.max(SaleModel.amount).as("max_amount")
+                    )
+                    .filter(SaleModel.region == "missing")
+                    .first(as: EmptySaleExtremaAggregate.self, on: tx))
+            #expect(emptyExtrema.firstSaleAt == nil)
+            #expect(emptyExtrema.lastSaleAt == nil)
+            #expect(emptyExtrema.minAmount == nil)
+            #expect(emptyExtrema.maxAmount == nil)
+
+            // Waits for slice 18: the todo count per user name through `join(\.todos)`, 2 for the one user with two todos.
+        }
+    }
+
+    @Test func minMaxNullableTextRoundtrip() async throws {
+        struct NullableNoteExtremaAggregate: Decodable {
+            let minNote: String?
+            let maxNote: String?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            _ = try await seedNullableRow(on: tx, note: nil)
+            _ = try await seedNullableRow(on: tx, note: "gamma")
+            _ = try await seedNullableRow(on: tx, note: "alpha")
+
+            let extrema = try #require(
+                try await NullableRowModel.query()
+                    .select(SQL.min(NullableRowModel.note).as("min_note"), SQL.max(NullableRowModel.note).as("max_note"))
+                    .first(as: NullableNoteExtremaAggregate.self, on: tx))
+            #expect(extrema.minNote == "alpha")
+            #expect(extrema.maxNote == "gamma")
+
+            let allNullExtrema = try #require(
+                try await NullableRowModel.query()
+                    .select(SQL.min(NullableRowModel.note).as("min_note"), SQL.max(NullableRowModel.note).as("max_note"))
+                    .filter(NullableRowModel.note.isNull)
+                    .first(as: NullableNoteExtremaAggregate.self, on: tx))
+            #expect(allNullExtrema.minNote == nil)
+            #expect(allNullExtrema.maxNote == nil)
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.
@@ -744,6 +978,8 @@ private func setupSchema(on tx: Transaction) async throws {
         """)
     try await tx.query("CREATE TEMP TABLE profiles (id BIGSERIAL PRIMARY KEY, tags TEXT[] NOT NULL)")
     try await tx.query("CREATE TEMP TABLE json_rows (id BIGSERIAL PRIMARY KEY, data JSONB NOT NULL)")
+    try await tx.query(
+        "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMP NOT NULL)")
     try await tx.query(
         "CREATE TEMP TABLE events (id UUID PRIMARY KEY, name TEXT NOT NULL, starts_at TIMESTAMP NOT NULL, day DATE NOT NULL)")
 }

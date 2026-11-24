@@ -71,8 +71,37 @@ import Testing
             #expect(try await IntervalRowModel.find(5, on: tx)?.leaseWindow == mixed)
         }
     }
-    // Waits for slice 14b: `aggregateIntervalsSupportReverseDateArithmetic`, a timestamp plus and minus
-    // `SQL.sum(IntervalRowModel.leaseWindow)` of rows 1 and 2 as projections, and the sum of no rows decoding as `nil`.
+
+    /// `Date` stands in for both of rust-dbkit's timestamp types, so its four projections are two here. The empty sum
+    /// decodes as a one-element tuple, where rust-dbkit decodes a struct with one field.
+    @Test func aggregateIntervalsSupportReverseDateArithmetic() async throws {
+        struct AggregateIntervalArithmetic: Decodable {
+            let utcAdd: Date?
+            let utcSub: Date?
+        }
+
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let utc = Date(timeIntervalSince1970: 1_700_000_000)
+            let aggregate = try #require(
+                try await IntervalRowModel.query()
+                    .select(
+                        (utc + SQL.sum(IntervalRowModel.leaseWindow)).as("utc_add"),
+                        (utc - SQL.sum(IntervalRowModel.leaseWindow)).as("utc_sub")
+                    )
+                    .filter(IntervalRowModel.id.in([1, 2]))
+                    .first(as: AggregateIntervalArithmetic.self, on: tx))
+            #expect(aggregate.utcAdd == utc + 5 * 3600)
+            #expect(aggregate.utcSub == utc - 5 * 3600)
+
+            let empty: Interval? = try #require(
+                try await IntervalRowModel.query()
+                    .select(SQL.sum(IntervalRowModel.leaseWindow))
+                    .filter(IntervalRowModel.id == -1)
+                    .first(on: tx))
+            #expect(empty == nil)
+        }
+    }
 }
 
 private func setupSchema(on tx: Transaction) async throws {

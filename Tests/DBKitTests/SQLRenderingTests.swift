@@ -263,6 +263,65 @@ class LeaseModel {
         #expect(fractional.binds.map(\.description) == ["1.5"])
     }
 
+    @Test func aggregatesProjectionsAndFunctions() {
+        let usSale = SaleModel.region == "us"
+        let rendered = SaleModel.query()
+            .select(
+                SaleModel.region.as("region"),
+                SQL.count(SaleModel.id).filter(usSale).as("us_sale_count"),
+                SQL.sum(SaleModel.amount).as("total")
+            )
+            .groupBy(SaleModel.region)
+            .having(SQL.sum(SaleModel.amount) > 0)
+            .render()
+        #expect(
+            rendered.sql
+                == #"SELECT "sales"."region" AS "region", COUNT("sales"."id") FILTER (WHERE "sales"."region" = $1) AS "us_sale_count", SUM("sales"."amount") AS "total" FROM "sales" GROUP BY "sales"."region" HAVING SUM("sales"."amount") > $2"#
+        )
+        // Waits for slice 15: the same aggregates per `SQL.dateTrunc(.day, SaleModel.createdAt)` bucket, selected as
+        // "bucket" and grouped by, as the kit renders them.
+    }
+
+    /// `groupBy` takes several expressions, `having` predicates combine with `AND`, and aggregates take computed values.
+    /// `SQL.countAll()` counts rows.
+    @Test func groupingByExpressionsAndAggregatingComputedValues() {
+        let bucket: Expr<Int32> = PriceModel.quantity / 10
+        let doubled: AggregateExpr<Int64?> = SQL.sum(PriceModel.quantity * 2)
+        let query: Projection<Int32, Double, Int64, Int64?, Decimal?> = PriceModel.query()
+            .select(
+                bucket.as("bucket"),
+                PriceModel.rate.as("rate"),
+                SQL.countAll().as("price_count"),
+                doubled.as("doubled_quantity"),
+                SQL.max(PriceModel.discount ?? 0).as("largest_discount")
+            )
+            .groupBy(bucket, PriceModel.rate)
+            .having(SQL.countAll() > 1)
+            .having(SQL.sum(PriceModel.amount) > 100)
+            .orderBy(doubled.desc)
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT ("prices"."quantity" / $1) AS "bucket", "prices"."rate" AS "rate", COUNT(*) AS "price_count", SUM(("prices"."quantity" * $2)) AS "doubled_quantity", MAX(COALESCE("prices"."discount", $3)) AS "largest_discount" FROM "prices" GROUP BY ("prices"."quantity" / $4), "prices"."rate" HAVING COUNT(*) > $5 AND SUM("prices"."amount") > $6 ORDER BY SUM(("prices"."quantity" * $7)) DESC"#
+        )
+        #expect(rendered.binds.map(\.description) == ["10", "2", "0", "10", "1", "100", "2"])
+    }
+
+    /// `SUM` of intervals is an interval, NULL without rows. Aggregates take interval arithmetic and shift timestamps.
+    @Test func aggregatesOfIntervalsAndTimestamps() {
+        let totalTerm: AggregateExpr<Interval?> = SQL.sum(LeaseModel.term + LeaseModel.grace)
+        let latestEnd: AggregateExpr<Date?> = SQL.max(LeaseModel.startsAt + LeaseModel.term)
+        let backToBackEnd: Expr<Date?> = SQL.min(LeaseModel.startsAt) + SQL.sum(LeaseModel.term)
+        let query: Projection<Interval?, Date?, Date?> = LeaseModel.query()
+            .select(totalTerm.as("total_term"), latestEnd.as("latest_end"), backToBackEnd.as("back_to_back_end"))
+        let rendered = query.render()
+        #expect(
+            rendered.sql
+                == #"SELECT SUM(("leases"."term" + "leases"."grace")) AS "total_term", MAX(("leases"."starts_at" + "leases"."term")) AS "latest_end", (MIN("leases"."starts_at") + SUM("leases"."term")) AS "back_to_back_end" FROM "leases""#
+        )
+        #expect(rendered.binds.isEmpty)
+    }
+
     @Test func mutations() {
         let insert = UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
             .returningAll()
