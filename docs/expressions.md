@@ -175,7 +175,7 @@ and intervals add to and subtract from each other. A nullable operand makes the 
 An `Interval` value keeps PostgreSQL's months, days and microseconds; `.days(_:)`, `.hours(_:)`, `.minutes(_:)` and
 `.seconds(_:)` build one.
 
-## Projections
+## Aggregation And Projections
 
 `select(…)` switches from models to expressions. Results decode as a typed tuple whose element types follow the
 expressions, or into a `Decodable` type matched by alias (exact name or snake_case):
@@ -187,12 +187,18 @@ class SaleModel {
     var region: String
     var amount: Int64
     var discount: Int64?
+    var createdAt: Date
 }
 
 struct SaleSummary: Decodable {
     let region: String
     let netAmount: Int64?
     let isDiscounted: Bool?
+}
+
+struct RegionTotal: Decodable {
+    let region: String
+    let total: Decimal?
 }
 ```
 
@@ -209,6 +215,17 @@ let summaries = try await SaleModel.query()
         (SaleModel.discount > 0).as("isDiscounted")
     )
     .all(as: SaleSummary.self, on: db)
+
+let regionTotals: [(String, Decimal?)] = try await SaleModel.query()
+    .select(SaleModel.region, SQL.sum(SaleModel.amount))
+    .groupBy(SaleModel.region)
+    .having(SQL.sum(SaleModel.amount) > 0)
+    .all(on: db)
+
+let totals = try await SaleModel.query()
+    .select(SaleModel.region.as("region"), SQL.sum(SaleModel.amount).as("total"))
+    .groupBy(SaleModel.region)
+    .all(as: RegionTotal.self, on: db)
 ```
 
 A selected expression keeps its nullability. A comparison on a nullable operand is `Bool?` and decodes NULL as
@@ -216,9 +233,27 @@ A selected expression keeps its nullability. A comparison on a nullable operand 
 the select list: give such a property an optional type, and a property without a matching alias fails with
 `DBKitError.missingColumn`.
 
+Aggregates: `SQL.count`, `SQL.countAll`, `SQL.sum`, `SQL.min`, `SQL.max`. Their result types follow PostgreSQL:
+
+| Aggregate | Result |
+| --- | --- |
+| `SQL.count(x)`, `SQL.countAll()` | `Int64` |
+| `SQL.sum` of `Int16` or `Int32` | `Int64?` |
+| `SQL.sum` of `Int64`, `Int` or `Decimal` | `Decimal?` |
+| `SQL.sum` of `Float`, `Double` or `Interval` | the input's type, optional |
+| `SQL.min`, `SQL.max` | the input's type, optional |
+
+`SUM`, `MIN` and `MAX` return NULL without input rows, so they are optional even over a required column; a nullable
+input doesn't nest the optional. A sum over an expression follows the expression's type, so
+`SQL.sum(int32Column * 2)` is `Int64?`. `SUM` of text, timestamps or booleans doesn't compile. `COUNT` is never NULL.
+
+Comparing an aggregate follows the nullability rules: `SQL.count(SaleModel.id) > 1` is `Expr<Bool>`, and
+`SQL.sum(SaleModel.amount) > 100` is `Expr<Bool?>`. `having` filters groups after aggregation and takes both; several
+`having` predicates combine with `AND`. `groupBy` takes one or more expressions.
+
 Use either all aliased or all unaliased expressions in one `select`. A projection takes `filter`, `distinct`,
-`orderBy`, `limit` and `offset` like a model query, and keeps what was built before `select`. `first(on:)` and
-`first(as:on:)` fetch one row.
+`groupBy`, `having`, `orderBy`, `limit` and `offset` like a model query, and keeps what was built before `select`.
+`first(on:)` and `first(as:on:)` fetch one row.
 
 ## Typed Projections
 
@@ -246,6 +281,48 @@ let lines = try await SaleModel.query()
 ```
 
 A missing property, a misspelled label and an expression of another type are compile errors. The types must match
-exactly, so a nullable expression, such as a comparison on a nullable column, needs an Optional property or `??`. The
+exactly, so a nullable expression, such as `SQL.max` or a comparison on a nullable column, needs an Optional property
+or `??`. The
 struct can be declared inside the function that runs the query. It needs its memberwise initializer and must be
 `Sendable`, which a public struct has to declare itself.
+
+## Filtered Aggregates
+
+```swift
+struct SalesOverview: Decodable {
+    let saleCount: Int64
+    let usSaleCount: Int64
+    let firstUSSaleAt: Date?
+}
+```
+
+```swift
+let usSale = SaleModel.region == "us"
+let overview = try await SaleModel.query()
+    .select(
+        SQL.count(SaleModel.id).as("sale_count"),
+        SQL.count(SaleModel.id).filter(usSale).as("us_sale_count"),
+        SQL.min(SaleModel.createdAt).filter(usSale).as("first_us_sale_at")
+    )
+    .filter(SaleModel.amount > 0)
+    .first(as: SalesOverview.self, on: db)
+```
+
+A query filter limits every aggregate's input; an aggregate's `.filter(…)` limits only that aggregate
+(`FILTER (WHERE …)`) and keeps its type. It takes a `Bool` or `Bool?` predicate. PostgreSQL takes one filter, right
+after the aggregate call, so only the aggregates have `.filter`, and it returns a plain `Expr` without one. Filter once,
+before wrapping: `SQL.sum(SaleModel.amount).filter(usSale) ?? 0` or
+`SQL.sum(SaleModel.amount).filter(usSale).cast(to: Double.self)`. Aggregates without `GROUP BY` return one row.
+
+## SQL Functions And Expression-Based Grouping
+
+```swift
+let amountBuckets: [(Int64, Int64)] = try await SaleModel.query()
+    .select(SaleModel.amount / 100, SQL.countAll())
+    .groupBy(SaleModel.amount / 100)
+    .orderBy(SQL.countAll().desc)
+    .all(on: db)
+```
+
+`groupBy` takes any expression, and `orderBy` takes any expression, including aggregates. Aggregates take computed
+values too: `SQL.max(SaleModel.discount ?? 0)`.

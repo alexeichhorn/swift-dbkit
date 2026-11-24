@@ -74,6 +74,7 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `+`, `-`, `*` and `/` accept operands of different numeric types and give PostgreSQL's result type, such as `Expr<Int64>` for `Int32` with `Int64`. | The kit required both operands to have the same type; see "Ported Beyond The Kit". |
 | `Condition.predicate` is `Expr<Bool?>?` instead of `Expr<Bool>?`. Code that stored it as `Expr<Bool>?` changes the annotation. | See "A condition's predicate" under "Different On Purpose". |
 | `SQL.row` takes two to six columns, one overload per arity, instead of any number through a parameter pack. Its tuples take each column's own type, and `in` is `Expr<Bool?>` when a column is nullable. | With a parameter pack, Swift types an integer literal in `SQL.row(…).in([(7, 8)])` as `Int` before it resolves the pack, so the tuple doesn't match `Int64` columns. |
+| An aggregate's `filter` returns `Expr<Value>` instead of `AggregateExpr<Value>`, so a filtered aggregate has no `filter`. Code that stored a filtered aggregate as `AggregateExpr`, such as `let usCount: AggregateExpr<Int64> = SQL.count(SaleModel.id).filter(usSale)`, changes the annotation to `Expr<Int64>`. | The kit rendered a second filter as `… FILTER (WHERE a) FILTER (WHERE b)`, which PostgreSQL rejects. rust-dbkit returns a plain expression too. |
 
 ## Rust Tests Without A Swift Counterpart
 
