@@ -80,7 +80,7 @@ final class SQLRenderer {
             return "\(quoted(qualifier)).\(quoted(column.name))"
         case .bind(let bind):
             binds.append(bind)
-            return "$\(binds.count)"
+            return "$\(binds.count)\(bind.placeholderCast ?? "")"
         case .null:
             return "NULL"
         case .raw(let sql):

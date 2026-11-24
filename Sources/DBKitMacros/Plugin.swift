@@ -5,7 +5,8 @@ import SwiftSyntaxMacros
 @main
 struct DBKitMacrosPlugin: CompilerPlugin {
     let providingMacros: [any Macro.Type] = [
-        ModelMacro.self, MarkerMacro.self, RelationMacro.self, ColumnMacro.self, ExtensionCodeMacro.self, ProjectionMacro.self,
+        ModelMacro.self, MarkerMacro.self, RelationMacro.self, ColumnMacro.self, ExtensionCodeMacro.self, DatabaseEnumMacro.self,
+        ProjectionMacro.self,
     ]
 }
 

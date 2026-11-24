@@ -72,6 +72,12 @@ public struct Bind: Sendable, CustomStringConvertible {
         self.value = value
     }
 
+    /// The `::type` suffix for placeholders whose type the driver can't name.
+    var placeholderCast: String? {
+        let type = Swift.type(of: value)
+        return type.needsPlaceholderCast ? "::\(type.sqlTypeName)" : nil
+    }
+
     public var description: String { String(describing: value) }
 }
 

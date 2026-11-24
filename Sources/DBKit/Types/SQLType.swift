@@ -30,9 +30,13 @@ where
 {
     /// PostgreSQL type name, used for `CAST` and typed placeholders.
     static var sqlTypeName: String { get }
+    /// Whether placeholders need an explicit `::type` cast, e.g. for enums and pgvector types
+    /// whose OIDs are unknown to the driver.
+    static var needsPlaceholderCast: Bool { get }
 }
 
 extension SQLValue {
+    public static var needsPlaceholderCast: Bool { false }
     public var sqlNode: SQLNode { .bind(Bind(self)) }
     public var nonNull: Self? { self }
 
