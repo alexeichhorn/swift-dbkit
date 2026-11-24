@@ -22,6 +22,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - `exists(subquery)` as a `Bool` expression
 - Streaming of projections, grouping and aggregates
 - Schema-qualified tables, as an optional `schema:` argument on `@Model`
+- Property names starting with `__dbkit_` are reserved for generated code and rejected by `@Model`, so a property such as `_name` no longer clashes with the generated storage
 
 ## Left Out
 
