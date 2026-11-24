@@ -63,7 +63,8 @@ Comparing a column with a value of another type doesn't compile.
 ## Common Mutations
 
 Insert with the generated `Insert` type. Auto-increment keys are left out; columns with a Swift default
-(`var isComplete: Bool = false`) and optional columns can be omitted. Defaults are evaluated per insert:
+(`var isComplete: Bool = false`, `var id: UUID = UUID()`) and optional columns can be omitted. Defaults are evaluated
+per insert:
 
 ```swift
 let created = try await UserModel.insert(UserModel.Insert(name: "Alex", email: "a@b.com"))
@@ -91,6 +92,7 @@ Use the `update()` / `delete()` builders for bulk or conditional mutations.
 
 - [Querying](docs/querying.md)
 - [Mutations](docs/mutations.md)
+- [Postgres types](docs/postgres-types.md)
 - [Database](docs/database.md)
 
 ## License
