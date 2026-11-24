@@ -15,6 +15,7 @@ public struct SelectStatement: Sendable {
     var orderBy: [OrderBy] = []
     var limit: Int?
     var offset: Int?
+    var lock: RowLock?
 
     init(table: String) {
         self.table = table
@@ -34,6 +35,16 @@ enum JoinKind: String, Sendable {
 enum JoinClause: Sendable {
     case relation(Relation, JoinKind)
     case table(String, on: SQLNode, JoinKind)
+}
+
+/// Waiting behavior of `SELECT … FOR UPDATE`.
+public enum RowLock: Sendable {
+    /// Wait for conflicting locks to be released.
+    case wait
+    /// Skip rows that other transactions have locked, e.g. for job queues.
+    case skipLocked
+    /// Fail immediately when a row is locked.
+    case noWait
 }
 
 /// A relation joined for eager loading, with the joined relations of its children.
@@ -99,6 +110,17 @@ final class SQLRenderer {
         }
         if let limit = statement.limit { clauses.append("LIMIT \(limit)") }
         if let offset = statement.offset { clauses.append("OFFSET \(offset)") }
+        if let lock = statement.lock {
+            // Scope the lock to the base table so outer-joined rows aren't locked (PostgreSQL rejects locking
+            // the nullable side of an outer join).
+            var clause = scope.joins.isEmpty ? "FOR UPDATE" : "FOR UPDATE OF \(quoted(base))"
+            switch lock {
+            case .wait: break
+            case .skipLocked: clause += " SKIP LOCKED"
+            case .noWait: clause += " NOWAIT"
+            }
+            clauses.append(clause)
+        }
 
         let from = statement.alias.map { "\(quoted(statement.table)) AS \(quoted($0))" } ?? quoted(statement.table)
         let head = "SELECT \(statement.distinct ? "DISTINCT " : "")\(columns.joined(separator: ", ")) FROM \(from)"

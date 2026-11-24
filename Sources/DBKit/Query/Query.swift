@@ -21,6 +21,12 @@ public struct Query<Row: Model>: SelectQuery {
         updating { $0.joins.append(.relation(Row.Base.Relations.self[keyPath: relation].relation, .left)) }
     }
 
+    /// Locks the selected rows: `SELECT … FOR UPDATE`. Use inside a transaction. PostgreSQL rejects locking
+    /// together with `DISTINCT` or `GROUP BY`.
+    public func forUpdate(_ waiting: RowLock = .wait) -> Self {
+        updating { $0.lock = waiting }
+    }
+
     /// Switches to a projection of the given expressions, decoded as a typed tuple:
     /// `.select(UserModel.id, UserModel.email)` returns `(Int64, String?)` rows.
     public func select<each E: SQLExpression>(_ expressions: repeat each E) -> Projection<repeat (each E).Value> {
