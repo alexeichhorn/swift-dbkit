@@ -368,7 +368,7 @@ class ValueRowModel {
             #expect(
                 document?.preferences == Preferences(theme: "dark") && document?.tags == ["a", "b"] && document?.payload == Data([0, 1, 2]))
             let masked = try await DocumentModel.query()
-                // Waits for slice 11: `.filter((DocumentModel.accessMask & 0b0010) != 0)`.
+                .filter((DocumentModel.accessMask & 0b0010) != 0)
                 // Waits for slice 12: `.filter(SQL.interval(hours: 2) == DocumentModel.leaseWindow)`.
                 .filter(DocumentModel.kind == "note")
                 .all(on: tx)

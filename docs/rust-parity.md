@@ -18,6 +18,7 @@ The kit lacked these rust-dbkit features. They are part of this port:
 - Arithmetic on mixed numeric types, following PostgreSQL's promotion: the wider integer, and `Double` for an integer with `Float` or `Double`
 - Mixed integer widths in bitwise operators, producing the wider type
 - `Int16` shift counts besides `Int32`
+- Bitwise operators with one required and one nullable operand, a nullable shift count, and a value on the left
 - Comparisons on nullable columns typed as `Bool?`
 - Parentheses around a comparison used inside another comparison
 - `exists(subquery)` as a `Bool` expression
@@ -87,3 +88,6 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `dbkit/type_support.rs::build_arguments_accepts_json` | PostgresNIO binds every `SQLValue`; `jsonColumnRoundtrip` sends a payload of the same shape to PostgreSQL. |
 | `dbkit/type_support.rs::build_arguments_accepts_bytea` | PostgresNIO binds every `SQLValue`; `byteaRoundtripFilterAndActiveModelNulling` sends the same bytes to PostgreSQL. |
 | `ui/fail_nullable_model_field_type_alias.rs` | rust-dbkit's macro tells nullable fields by their syntax and rejects an alias of `Option`. Swift's type checker resolves `typealias OptionalText = String?`, so `@Model` accepts the alias as a nullable column. |
+| `bitwise_sql.rs::compiles_custom_integer_backed_type_without_exposing_its_storage_type` | Custom integer-backed types in bitwise expressions are left out. |
+| `bitwise_integration.rs::custom_integer_backed_type_filters_and_roundtrips` | Custom integer-backed types in bitwise expressions are left out. |
+| `ui/pass_bitwise_custom_integer_types.rs` | Custom integer-backed types in bitwise expressions are left out. |
