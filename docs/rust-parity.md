@@ -70,4 +70,14 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 | `ui/fail_appended_model_type.rs` | `@Model` adds members and extensions only, so it can't declare a type under another name, such as `UserModel` for `User`. |
 | `ui/fail_derive_model_with_dbkit_field_attr.rs` | Swift has no derive macros; `@Model` is the only way to declare a model. |
 | `ui/fail_model_suffix_double_model_type.rs` | `@Model` can't declare a type under another name, such as `UserModelModel` for `UserModel`. |
+| `dbkit-core/type_support.rs::value_from_uuid` | A value becomes a bind when a query uses it; `selectBindsUUIDDatetimeDateTime` binds the same UUID. |
+| `dbkit-core/type_support.rs::value_from_datetime_date_time` | A value becomes a bind when a query uses it; `selectBindsUUIDDatetimeDateTime` binds the same `Date`s. Swift has no time-of-day type. |
+| `dbkit-core/type_support.rs::value_from_utc_datetime` | A value becomes a bind when a query uses it; `selectBindsUTCDatetime` binds the same `Date`. |
+| `dbkit-core/type_support.rs::value_from_json` | A value becomes a bind when a query uses it; `selectBindsJSON` binds the same payload. |
+| `dbkit-core/type_support.rs::value_from_string_array` | A value becomes a bind when a query uses it; `selectBindsStringArray` binds the same array. |
+| `dbkit-core/type_support.rs::value_from_bytes` | A value becomes a bind when a query uses it; `selectBindsBytes` binds the same bytes. |
+| `dbkit/type_support.rs::build_arguments_accepts_uuid_datetime_date_time` | PostgresNIO binds every `SQLValue`; `uuidDateTimeRoundtrip` sends the same UUID and dates to PostgreSQL. |
+| `dbkit/type_support.rs::build_arguments_accepts_utc_datetime` | PostgresNIO binds every `SQLValue`; `timestamptzNullFilterAndActiveUpdateRoundtrip` sends the same `Date` to PostgreSQL. |
+| `dbkit/type_support.rs::build_arguments_accepts_json` | PostgresNIO binds every `SQLValue`; `jsonColumnRoundtrip` sends a payload of the same shape to PostgreSQL. |
+| `dbkit/type_support.rs::build_arguments_accepts_bytea` | PostgresNIO binds every `SQLValue`; `byteaRoundtripFilterAndActiveModelNulling` sends the same bytes to PostgreSQL. |
 | `ui/fail_nullable_model_field_type_alias.rs` | rust-dbkit's macro tells nullable fields by their syntax and rejects an alias of `Option`. Swift's type checker resolves `typealias OptionalText = String?`, so `@Model` accepts the alias as a nullable column. |

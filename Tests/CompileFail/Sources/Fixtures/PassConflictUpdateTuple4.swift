@@ -1,4 +1,5 @@
 import DBKit
+import Foundation
 
 @Model(table: "jobs")
 class JobModel {
@@ -7,11 +8,16 @@ class JobModel {
     var company: String
     var location: String
     var contentHash: String
-    // Waits for slice 7: `var removedAt: Date?` and `var updatedAt: Date`, set to 2026-01-01 00:00:00 in the insert.
+    var removedAt: Date?
+    var updatedAt: Date
 }
 
 private func upsertFourColumns() {
-    let job = JobModel.Insert(sourceID: "job-1", title: "Senior Rust Engineer", company: "Acme", location: "Zurich", contentHash: "hash-1")
+    // 2026-01-01 00:00:00 UTC.
+    let now = Date(timeIntervalSince1970: 1_767_225_600)
+    let job = JobModel.Insert(
+        sourceID: "job-1", title: "Senior Rust Engineer", company: "Acme", location: "Zurich", contentHash: "hash-1", removedAt: nil,
+        updatedAt: now)
     _ = JobModel.insert(job)
         .onConflict(JobModel.sourceID, doUpdate: JobModel.title, JobModel.company, JobModel.location, JobModel.contentHash)
     let updates = (JobModel.title, JobModel.company, JobModel.location, JobModel.contentHash)

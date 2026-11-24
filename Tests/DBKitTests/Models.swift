@@ -1,4 +1,5 @@
 import DBKit
+import Foundation
 
 @Model(table: "users")
 class UserModel {
@@ -45,4 +46,71 @@ class HintModel {
     @Key var name: String
     @Key var region: String?
     var note: String
+}
+
+@Model(table: "sales")
+class SaleModel {
+    @Key @AutoIncrement var id: Int64
+    var region: String
+    var amount: Int64
+    var createdAt: Date
+}
+
+struct Preferences: Codable, Hashable, DatabaseJSON {
+    var theme: String
+}
+
+@Model(table: "documents")
+class DocumentModel {
+    @Key @AutoIncrement var id: Int64
+    @ColumnName("type") var kind: String
+    var tags: [String]
+    var scores: [Int64]
+    var preferences: Preferences?
+    var payload: Data
+    var accessMask: Int64
+    // Waits for slice 12: `var leaseWindow: Interval`.
+}
+
+/// rust-dbkit's `events`. `Date` stands in for its `timestamp` and `date` columns; Swift has no type for its `time`
+/// column `starts_at_time`.
+@Model(table: "events")
+class EventModel {
+    @Key var id: UUID
+    var name: String
+    var startsAt: Date
+    var day: Date
+}
+
+@Model(table: "events_tz")
+class EventTzModel {
+    @Key var id: UUID
+    var title: String
+    var startsAt: Date
+    var endsAt: Date?
+}
+
+@Model(table: "profiles")
+class ProfileModel {
+    @Key @AutoIncrement var id: Int64
+    var tags: [String]
+}
+
+/// rust-dbkit's `serde_json::Value` payload `{"name": …, "active": …}`, as a `Codable` type.
+struct JSONPayload: Codable, Equatable, DatabaseJSON {
+    var name: String
+    var active: Bool
+}
+
+@Model(table: "json_rows")
+class JSONRowModel {
+    @Key @AutoIncrement var id: Int64
+    var data: JSONPayload
+}
+
+@Model(table: "blob_rows")
+class BlobRowModel {
+    @Key @AutoIncrement var id: Int64
+    var data: Data
+    var dataOptional: Data?
 }

@@ -1,4 +1,5 @@
 import DBKit
+import Foundation
 import Testing
 
 @Suite struct IntegrationPostgresTests {
@@ -432,6 +433,76 @@ import Testing
             #expect(try await orderLine(target.orderID, target.lineID, on: tx) == nil)
         }
     }
+
+    /// `Date` stands in for the `timestamp` and `date` values; rust-dbkit's `time` column has no Swift type.
+    @Test func uuidDateTimeRoundtrip() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let day = isoDate("2024-01-02T00:00:00Z")
+            let startsAt = isoDate("2024-01-02T03:04:05Z")
+            let id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
+            let inserted = try #require(
+                try await EventModel.insert(EventModel.Insert(id: id, name: "Launch", startsAt: startsAt, day: day)).returningAll().first(
+                    on: tx))
+            #expect(inserted.id == id)
+            #expect(inserted.startsAt == startsAt)
+            #expect(inserted.day == day)
+
+            let found = try #require(
+                try await EventModel.query()
+                    .filter(EventModel.id == id)
+                    .filter(EventModel.day == day)
+                    .filter(EventModel.startsAt == startsAt)
+                    .first(on: tx))
+            #expect(found.id == id)
+            #expect(found.name == "Launch")
+            #expect(found.startsAt == startsAt)
+            #expect(found.day == day)
+        }
+    }
+
+    @Test func arrayColumnRoundtrip() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let tags = ["alpha", "beta"]
+            let inserted = try #require(try await ProfileModel.insert(ProfileModel.Insert(tags: tags)).returningAll().first(on: tx))
+            #expect(inserted.tags == tags)
+
+            let matched = try await ProfileModel.query().filter(ProfileModel.tags == tags).all(on: tx)
+            #expect(matched.map(\.id) == [inserted.id])
+
+            let updatedTags = ["gamma", "delta"]
+            var active = inserted.active()
+            active.tags = updatedTags
+            let updated = try await active.update(on: tx)
+            #expect(updated.tags == updatedTags)
+
+            let fetched = try #require(try await ProfileModel.find(updated.id, on: tx))
+            #expect(fetched.tags == updatedTags)
+        }
+    }
+
+    @Test func jsonColumnRoundtrip() async throws {
+        try await withRollback { tx in
+            try await setupSchema(on: tx)
+            let payload = JSONPayload(name: "alpha", active: true)
+            let inserted = try #require(try await JSONRowModel.insert(JSONRowModel.Insert(data: payload)).returningAll().first(on: tx))
+            #expect(inserted.data == payload)
+
+            let matched = try await JSONRowModel.query().filter(JSONRowModel.data == payload).all(on: tx)
+            #expect(matched.map(\.id) == [inserted.id])
+
+            let updatedPayload = JSONPayload(name: "beta", active: false)
+            var active = inserted.active()
+            active.data = updatedPayload
+            let updated = try await active.update(on: tx)
+            #expect(updated.data == updatedPayload)
+
+            let fetched = try #require(try await JSONRowModel.find(updated.id, on: tx))
+            #expect(fetched.data == updatedPayload)
+        }
+    }
 }
 
 /// rust-dbkit's `setup_schema`, with the temp tables of the tests ported so far.
@@ -448,6 +519,10 @@ private func setupSchema(on tx: Transaction) async throws {
             PRIMARY KEY (target_id, run_id)
         )
         """)
+    try await tx.query("CREATE TEMP TABLE profiles (id BIGSERIAL PRIMARY KEY, tags TEXT[] NOT NULL)")
+    try await tx.query("CREATE TEMP TABLE json_rows (id BIGSERIAL PRIMARY KEY, data JSONB NOT NULL)")
+    try await tx.query(
+        "CREATE TEMP TABLE events (id UUID PRIMARY KEY, name TEXT NOT NULL, starts_at TIMESTAMP NOT NULL, day DATE NOT NULL)")
 }
 
 private func seedUser(on tx: Transaction, name: String, email: String) async throws -> UserModel {

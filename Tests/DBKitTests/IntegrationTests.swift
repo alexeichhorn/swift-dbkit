@@ -15,6 +15,51 @@ class RolledBackNoteModel {
     var body: String
 }
 
+/// A type of the app's own, stored as `text` through its PostgresNIO encoding.
+struct EmailAddress: SQLValue, Equatable {
+    static var sqlTypeName: String { "text" }
+    static var psqlType: PostgresDataType { .text }
+    static var psqlFormat: PostgresFormat { .binary }
+
+    let address: String
+
+    init(_ address: String) {
+        self.address = address
+    }
+
+    func encode<JSONEncoder: PostgresJSONEncoder>(into byteBuffer: inout ByteBuffer, context: PostgresEncodingContext<JSONEncoder>) {
+        byteBuffer.writeString(address)
+    }
+
+    init<JSONDecoder: PostgresJSONDecoder>(
+        from buffer: inout ByteBuffer, type: PostgresDataType, format: PostgresFormat, context: PostgresDecodingContext<JSONDecoder>
+    ) throws {
+        address = try String(from: &buffer, type: type, format: format, context: context)
+    }
+}
+
+/// A column of each value type that neither rust-dbkit nor the kit tests, and the nullable form of a few.
+@Model(table: "value_rows")
+class ValueRowModel {
+    @Key @AutoIncrement var id: Int64
+    var price: Decimal
+    var ratio: Float
+    var score: Double
+    var flags: [Bool]
+    var smallCounts: [Int16]
+    var counts: [Int32]
+    var bigCounts: [Int64]
+    var sizes: [Int]
+    var ratios: [Float]
+    var scores: [Double]
+    var ids: [UUID]
+    var dates: [Date]
+    var email: EmailAddress
+    var discount: Decimal?
+    var weights: [Double]?
+    var backupEmail: EmailAddress?
+}
+
 @Suite struct IntegrationTests {
     @Test func urlsTakeTheLibpqSSLModesAndRejectOthers() throws {
         for mode in ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] {
@@ -294,6 +339,131 @@ class RolledBackNoteModel {
         #expect(error.description == "the connection is closed")
         // The pool replaces the lost connection.
         #expect(try await db.query("SELECT 1").collect().count == 1)
+    }
+
+    @Test func postgresTypesAggregatesAndFunctions() async throws {
+        try await withRollback { tx in
+            // Waits for slice 12: `lease_window INTERVAL NOT NULL`.
+            try await tx.query(
+                """
+                CREATE TEMP TABLE documents (
+                    id BIGSERIAL PRIMARY KEY, type TEXT NOT NULL, tags TEXT[] NOT NULL, scores BIGINT[] NOT NULL, preferences JSONB,
+                    payload BYTEA NOT NULL, access_mask BIGINT NOT NULL
+                )
+                """)
+            let document = try await DocumentModel.insert(
+                DocumentModel.Insert(
+                    kind: "note",
+                    tags: ["a", "b"],
+                    scores: [1, 2],
+                    preferences: Preferences(theme: "dark"),
+                    payload: Data([0, 1, 2]),
+                    accessMask: 0b0110
+                        // Waits for slice 12: `leaseWindow: .hours(2)`.
+                )
+            ).returningAll().first(on: tx)
+            #expect(
+                document?.preferences == Preferences(theme: "dark") && document?.tags == ["a", "b"] && document?.payload == Data([0, 1, 2]))
+            let masked = try await DocumentModel.query()
+                // Waits for slice 11: `.filter((DocumentModel.accessMask & 0b0010) != 0)`.
+                // Waits for slice 12: `.filter(SQL.interval(hours: 2) == DocumentModel.leaseWindow)`.
+                .filter(DocumentModel.kind == "note")
+                .all(on: tx)
+            #expect(masked.count == 1)
+
+            // Waits for slice 14: the `sales` totals per region, as `Decodable` rows, as a `@Projection` and as a tuple.
+            // Waits for slice 16: the string functions on `sales`.
+            // Waits for slices 26 and 28: the `tasks` insert with `@DatabaseDefault var updatedAt: Date`, the enum update
+            // and `deliveries`.
+            // Waits for slice 13: `SQL.row(TaskModel.state, TaskModel.title).in(…)`.
+        }
+    }
+
+    /// A timestamp read from a row must be written back unchanged; these two lose a microsecond when truncated.
+    @Test(arguments: ["2017-07-07 04:49:25.453571", "2034-03-02 03:02:14.249081"])
+    func datesBindToTheNearestMicrosecond(stored: String) async throws {
+        try await withRollback { tx in
+            try await tx.query(
+                "CREATE TEMP TABLE sales (id BIGSERIAL PRIMARY KEY, region TEXT NOT NULL, amount BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL)"
+            )
+            try await tx.query("INSERT INTO sales (region, amount, created_at) VALUES ('read', 1, \(stored + "+00")::timestamptz)")
+            let read = try #require(try await SaleModel.query().first(on: tx))
+            #expect(try await SaleModel.query().filter(SaleModel.createdAt == read.createdAt).all(on: tx).count == 1)
+            // Waits for slice 9: the optional filter value `SaleModel.createdAt == Expr<Date?>.value(read.createdAt)` finds it too.
+
+            var active = read.active()
+            active.createdAt = read.createdAt
+            _ = try await active.update(on: tx)
+            try await SaleModel.insert(SaleModel.Insert(region: "inserted", amount: 1, createdAt: read.createdAt)).execute(on: tx)
+            try await SaleModel.insert(SaleModel.Insert(region: "set", amount: 1, createdAt: Date(timeIntervalSince1970: 0))).execute(
+                on: tx)
+            try await SaleModel.update().set(SaleModel.createdAt, to: read.createdAt).filter(SaleModel.region == "set").execute(on: tx)
+
+            var written: [String] = []
+            let rows = try await tx.query(
+                "SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') FROM sales ORDER BY id")
+            for try await text in rows.decode(String.self) { written.append(text) }
+            #expect(written == [stored, stored, stored])
+        }
+    }
+
+    @Test func valueTypesRoundtripThroughInsertsFiltersAndUpdates() async throws {
+        try await withRollback { tx in
+            try await tx.query(
+                """
+                CREATE TEMP TABLE value_rows (
+                    id BIGSERIAL PRIMARY KEY, price NUMERIC NOT NULL, ratio REAL NOT NULL, score DOUBLE PRECISION NOT NULL,
+                    flags BOOLEAN[] NOT NULL, small_counts SMALLINT[] NOT NULL, counts INTEGER[] NOT NULL, big_counts BIGINT[] NOT NULL,
+                    sizes BIGINT[] NOT NULL, ratios REAL[] NOT NULL, scores DOUBLE PRECISION[] NOT NULL, ids UUID[] NOT NULL,
+                    dates TIMESTAMPTZ[] NOT NULL, email TEXT NOT NULL, discount NUMERIC, weights DOUBLE PRECISION[], backup_email TEXT
+                )
+                """)
+            let price = Decimal(string: "12.34")!
+            let discount = Decimal(string: "0.5")!
+            let ids = [
+                UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+            ]
+            let dates = [isoDate("2024-01-02T03:04:05Z"), isoDate("2024-03-14T10:15:00Z")]
+
+            let inserted = try #require(
+                try await ValueRowModel.insert(
+                    ValueRowModel.Insert(
+                        price: price, ratio: 0.5, score: 2.25, flags: [true, false], smallCounts: [1, -2], counts: [3, 4],
+                        bigCounts: [5, 6],
+                        sizes: [7, 8], ratios: [0.25, 0.75], scores: [1.5, -1.5], ids: ids, dates: dates, email: EmailAddress("a@b.com"),
+                        discount: discount, weights: [0.1, 0.2], backupEmail: EmailAddress("b@c.com"))
+                )
+                .returningAll().first(on: tx))
+            #expect(inserted.price == price && inserted.ratio == 0.5 && inserted.score == 2.25)
+            #expect(inserted.flags == [true, false] && inserted.smallCounts == [1, -2] && inserted.counts == [3, 4])
+            #expect(inserted.bigCounts == [5, 6] && inserted.sizes == [7, 8] && inserted.ratios == [0.25, 0.75])
+            #expect(inserted.scores == [1.5, -1.5] && inserted.ids == ids && inserted.dates == dates)
+            #expect(inserted.email == EmailAddress("a@b.com") && inserted.discount == discount)
+            #expect(inserted.weights == [0.1, 0.2] && inserted.backupEmail == EmailAddress("b@c.com"))
+
+            let matched = try await ValueRowModel.query()
+                .filter(ValueRowModel.price == price)
+                .filter(ValueRowModel.ratio == 0.5)
+                .filter(ValueRowModel.score > 2)
+                .filter(ValueRowModel.ids == ids)
+                .filter(ValueRowModel.dates == dates)
+                .filter(ValueRowModel.email == EmailAddress("a@b.com"))
+                .filter(ValueRowModel.discount == discount)
+                .all(on: tx)
+            #expect(matched.map(\.id) == [inserted.id])
+
+            let updated = try #require(
+                try await ValueRowModel.update()
+                    .set(ValueRowModel.price, to: Decimal(string: "99.99")!)
+                    .set(ValueRowModel.ids, to: [])
+                    .set(ValueRowModel.weights, to: [3])
+                    .set(ValueRowModel.backupEmail, to: EmailAddress("c@d.com"))
+                    .filter(ValueRowModel.id == inserted.id)
+                    .returningAll()
+                    .first(on: tx))
+            #expect(updated.price == Decimal(string: "99.99") && updated.ids.isEmpty)
+            #expect(updated.weights == [3] && updated.backupEmail == EmailAddress("c@d.com"))
+        }
     }
 }
 
