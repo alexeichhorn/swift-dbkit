@@ -1,3 +1,6 @@
+import NIOCore
+import PostgresNIO
+
 // PostgreSQL string functions. A NULL argument makes the result NULL, except where a function says otherwise. Swift
 // values become bind parameters, never SQL text.
 //
@@ -390,6 +393,107 @@ extension SQL {
         call("SPLIT_PART", text, delimiter, index)
     }
 
+    // MARK: Regex inspection
+
+    /// `REGEXP_LIKE`. PostgreSQL 15+.
+    public static func regexIsMatch<T: SQLArgument>(_ text: T, _ pattern: some SQLArgument<String>) -> Expr<T.Value.AsBool>
+    where T.Value.NonNull == String {
+        call("REGEXP_LIKE", text, pattern)
+    }
+    public static func regexIsMatch<T: SQLArgument>(_ text: T, _ pattern: any SQLExpression<String?>) -> Expr<Bool?>
+    where T.Value.NonNull == String {
+        call("REGEXP_LIKE", text, pattern)
+    }
+    /// `REGEXP_COUNT`. PostgreSQL 15+.
+    public static func regexCount<T: SQLArgument>(_ text: T, _ pattern: some SQLArgument<String>) -> Expr<T.Value.AsInt32>
+    where T.Value.NonNull == String {
+        call("REGEXP_COUNT", text, pattern)
+    }
+    public static func regexCount<T: SQLArgument>(_ text: T, _ pattern: any SQLExpression<String?>) -> Expr<Int32?>
+    where T.Value.NonNull == String {
+        call("REGEXP_COUNT", text, pattern)
+    }
+    /// `REGEXP_INSTR`: the first 1-based match position, or 0. PostgreSQL 15+.
+    public static func regexPosition<T: SQLArgument>(_ text: T, _ pattern: some SQLArgument<String>) -> Expr<T.Value.AsInt32>
+    where T.Value.NonNull == String {
+        call("REGEXP_INSTR", text, pattern)
+    }
+    public static func regexPosition<T: SQLArgument>(_ text: T, _ pattern: any SQLExpression<String?>) -> Expr<Int32?>
+    where T.Value.NonNull == String {
+        call("REGEXP_INSTR", text, pattern)
+    }
+    /// `REGEXP_MATCH`: the capture groups of the first match; NULL when nothing matches.
+    public static func regexCaptures<T: SQLArgument, P: SQLArgument>(_ text: T, _ pattern: P) -> Expr<RegexCaptures?>
+    where T.Value.NonNull == String, P.Value.NonNull == String {
+        call("REGEXP_MATCH", text, pattern)
+    }
+    /// `REGEXP_SUBSTR`: the first whole match; NULL when nothing matches. PostgreSQL 15+.
+    public static func regexExtract<T: SQLArgument, P: SQLArgument>(_ text: T, _ pattern: P) -> Expr<String?>
+    where T.Value.NonNull == String, P.Value.NonNull == String {
+        call("REGEXP_SUBSTR", text, pattern)
+    }
+
+    // MARK: Regex transformation
+
+    public static func regexReplace<T: SQLArgument>(
+        _ text: T,
+        _ pattern: some SQLArgument<String>,
+        _ replacement: some SQLArgument<String>,
+        _ flags: RegexReplaceFlags = []
+    ) -> Expr<T.Value> where T.Value.NonNull == String {
+        call("REGEXP_REPLACE", text, pattern, replacement, flags.sql)
+    }
+    public static func regexReplace<T: SQLArgument, R: SQLArgument>(
+        _ text: T,
+        _ pattern: any SQLExpression<String?>,
+        _ replacement: R,
+        _ flags: RegexReplaceFlags = []
+    ) -> Expr<String?> where T.Value.NonNull == String, R.Value.NonNull == String {
+        call("REGEXP_REPLACE", text, pattern, replacement, flags.sql)
+    }
+    public static func regexReplace<T: SQLArgument>(
+        _ text: T,
+        _ pattern: some SQLArgument<String>,
+        _ replacement: any SQLExpression<String?>,
+        _ flags: RegexReplaceFlags = []
+    ) -> Expr<String?> where T.Value.NonNull == String {
+        call("REGEXP_REPLACE", text, pattern, replacement, flags.sql)
+    }
+
+    public static func regexSplit<T: SQLArgument>(_ text: T, _ pattern: some SQLArgument<String>, _ flags: RegexSplitFlags = [])
+        -> Expr<T.Value.AsStringArray> where T.Value.NonNull == String
+    {
+        call("REGEXP_SPLIT_TO_ARRAY", text, pattern, flags.contains(.caseInsensitive) ? "i" : "")
+    }
+    public static func regexSplit<T: SQLArgument>(_ text: T, _ pattern: any SQLExpression<String?>, _ flags: RegexSplitFlags = [])
+        -> Expr<[String]?> where T.Value.NonNull == String
+    {
+        call("REGEXP_SPLIT_TO_ARRAY", text, pattern, flags.contains(.caseInsensitive) ? "i" : "")
+    }
+
+    // MARK: Unicode and code points
+
+    /// `NORMALIZE`. PostgreSQL 13+, UTF8 databases.
+    public static func normalize<T: SQLArgument>(_ text: T, _ form: NormalizationForm) -> Expr<T.Value> where T.Value.NonNull == String {
+        Expr(.sequence([.raw("NORMALIZE("), text.sqlNode, .raw(", \(form.rawValue))")]))
+    }
+    /// `ASCII`: the first character's code point, or 0 for empty text.
+    public static func firstCodepoint<T: SQLArgument>(_ text: T) -> Expr<T.Value.AsInt32> where T.Value.NonNull == String {
+        call("ASCII", text)
+    }
+    /// `CHR`: the character for a code point.
+    public static func fromCodepoint<C: SQLArgument>(_ codepoint: C) -> Expr<C.Value.AsString> where C.Value.NonNull == Int32 {
+        call("CHR", codepoint)
+    }
+    /// `TO_ASCII`: removes accents. Only LATIN1, LATIN2, LATIN9 and WIN1250 databases.
+    public static func toASCII<T: SQLArgument>(_ text: T) -> Expr<T.Value> where T.Value.NonNull == String { call("TO_ASCII", text) }
+    /// `CASEFOLD`. PostgreSQL 18+, UTF8 databases.
+    public static func caseFold<T: SQLArgument>(_ text: T) -> Expr<T.Value> where T.Value.NonNull == String { call("CASEFOLD", text) }
+    /// `UNICODE_ASSIGNED`. PostgreSQL 18+, UTF8 databases.
+    public static func isUnicodeAssigned<T: SQLArgument>(_ text: T) -> Expr<T.Value.AsBool> where T.Value.NonNull == String {
+        call("UNICODE_ASSIGNED", text)
+    }
+
     private static func call<Result>(_ name: String, _ arguments: any SQLArgument...) -> Expr<Result> {
         Expr(.function(name, arguments.map(\.sqlNode)))
     }
@@ -400,3 +504,79 @@ public protocol SQLTextArgument: SQLArgument {}
 extension Column: SQLTextArgument where Value.NonNull == String {}
 extension Expr: SQLTextArgument where Value: SQLType, Value.NonNull == String {}
 extension AggregateExpr: SQLTextArgument where Value.NonNull == String {}
+
+public struct RegexReplaceFlags: OptionSet, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    public static let caseInsensitive = RegexReplaceFlags(rawValue: 1 << 0)
+    /// Replace every match instead of only the first.
+    public static let global = RegexReplaceFlags(rawValue: 1 << 1)
+
+    var sql: String { (contains(.global) ? "g" : "") + (contains(.caseInsensitive) ? "i" : "") }
+}
+
+public struct RegexSplitFlags: OptionSet, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    public static let caseInsensitive = RegexSplitFlags(rawValue: 1 << 0)
+}
+
+public enum NormalizationForm: String, Sendable {
+    case nfc = "NFC", nfd = "NFD", nfkc = "NFKC", nfkd = "NFKD"
+}
+
+/// The result of `SQL.regexCaptures`: one entry per capture group (or the whole match without groups);
+/// `nil` for a group that didn't participate.
+public struct RegexCaptures: SQLValue, Hashable {
+    public let groups: [String?]
+
+    public init(_ groups: [String?]) { self.groups = groups }
+
+    public static var sqlTypeName: String { "text[]" }
+    public static var psqlType: PostgresDataType { .textArray }
+    public static var psqlFormat: PostgresFormat { .binary }
+
+    public func encode<JSONEncoder: PostgresJSONEncoder>(into buffer: inout ByteBuffer, context: PostgresEncodingContext<JSONEncoder>) {
+        buffer.writeInteger(Int32(1))  // dimensions
+        buffer.writeInteger(Int32(groups.contains(nil) ? 1 : 0))
+        buffer.writeInteger(PostgresDataType.text.rawValue)
+        buffer.writeInteger(Int32(groups.count))
+        buffer.writeInteger(Int32(1))  // lower bound
+        for group in groups {
+            guard let group else {
+                buffer.writeInteger(Int32(-1))
+                continue
+            }
+            buffer.writeInteger(Int32(group.utf8.count))
+            buffer.writeString(group)
+        }
+    }
+
+    // Binary array layout: dimensions, has-null flag, element OID, then per dimension (length, lower bound),
+    // then per element a length (-1 for NULL) and its bytes.
+    public init<JSONDecoder: PostgresJSONDecoder>(
+        from buffer: inout ByteBuffer,
+        type: PostgresDataType,
+        format: PostgresFormat,
+        context: PostgresDecodingContext<JSONDecoder>
+    ) throws {
+        guard format == .binary, let dimensions = buffer.readInteger(as: Int32.self), buffer.readInteger(as: Int32.self) != nil,
+            buffer.readInteger(as: UInt32.self) != nil
+        else { throw PostgresDecodingError.Code.failure }
+        guard dimensions > 0 else {
+            self.init([])
+            return
+        }
+        guard dimensions == 1, let count = buffer.readInteger(as: Int32.self), buffer.readInteger(as: Int32.self) != nil else {
+            throw PostgresDecodingError.Code.failure
+        }
+        var groups: [String?] = []
+        for _ in 0..<count {
+            guard let length = buffer.readInteger(as: Int32.self) else { throw PostgresDecodingError.Code.failure }
+            groups.append(length < 0 ? nil : buffer.readString(length: Int(length)))
+        }
+        self.init(groups)
+    }
+}
