@@ -527,3 +527,386 @@ public func / <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<Double?
 public func / <R: SQLExpression>(lhs: Double, rhs: R) -> Expr<R.Value.AsDouble> where R.Value: SQLMixedNumeric {
     Expr(.infix(lhs.sqlNode, "/", rhs.sqlNode))
 }
+
+// MARK: - Bitwise (integers)
+//
+// `&`, `|` and `^` type like arithmetic: operands of one type give that type, nullable when either operand is, and a
+// literal takes the other operand's type.
+
+public func & <L: SQLExpression>(lhs: L, rhs: L.Value.NonNull) -> Expr<L.Value> where L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+public func & <R: SQLExpression>(lhs: R.Value.NonNull, rhs: R) -> Expr<R.Value> where R.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+public func & <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value == R.Value, L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+public func & <L: SQLExpression, R: SQLExpression, V: SQLInteger>(lhs: L, rhs: R) -> Expr<V?> where L.Value == V, R.Value == V? {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+public func & <L: SQLExpression, R: SQLExpression, V: SQLInteger>(lhs: L, rhs: R) -> Expr<V?> where L.Value == V?, R.Value == V {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+
+public func | <L: SQLExpression>(lhs: L, rhs: L.Value.NonNull) -> Expr<L.Value> where L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+public func | <R: SQLExpression>(lhs: R.Value.NonNull, rhs: R) -> Expr<R.Value> where R.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+public func | <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value == R.Value, L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+public func | <L: SQLExpression, R: SQLExpression, V: SQLInteger>(lhs: L, rhs: R) -> Expr<V?> where L.Value == V, R.Value == V? {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+public func | <L: SQLExpression, R: SQLExpression, V: SQLInteger>(lhs: L, rhs: R) -> Expr<V?> where L.Value == V?, R.Value == V {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+
+/// Bitwise XOR, PostgreSQL's `#`.
+public func ^ <L: SQLExpression>(lhs: L, rhs: L.Value.NonNull) -> Expr<L.Value> where L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+public func ^ <R: SQLExpression>(lhs: R.Value.NonNull, rhs: R) -> Expr<R.Value> where R.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+public func ^ <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value == R.Value, L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+public func ^ <L: SQLExpression, R: SQLExpression, V: SQLInteger>(lhs: L, rhs: R) -> Expr<V?> where L.Value == V, R.Value == V? {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+public func ^ <L: SQLExpression, R: SQLExpression, V: SQLInteger>(lhs: L, rhs: R) -> Expr<V?> where L.Value == V?, R.Value == V {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+
+// MARK: - Bitwise between integer types
+//
+// Mixed integer types give the wider one from the `SQLMixedNumeric` table, nullable when either operand is. They are
+// disfavored like arithmetic's, so the same-type overloads above win wherever they apply. Unlike arithmetic's, they take
+// a plain value only as a `SQLSizedInteger`, never as Swift's `Int`: an overload accepting an `Int` value captures an
+// untyped literal inside a nested expression, binding the `255` of `(int64Column & 255) ^ int64Column` as `Int`. Per
+// operator there are three groups: an expression on the left, keyed on its type, with a sized value or expression on
+// the right; an `Int` expression on the right; and a sized value on the left, keyed on the right expression's type.
+
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt16>
+where L.Value == Int16, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt16?>
+where L.Value == Int16?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt32>
+where L.Value == Int32, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt32?>
+where L.Value == Int32?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt64>
+where L.Value == Int64, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt64?>
+where L.Value == Int64?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt64>
+where L.Value == Int, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt64?>
+where L.Value == Int?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.WithInt64>
+where L.Value: SQLMixedNumeric, L.Value.NonNull: SQLInteger, R.Value == Int {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull.WithInt64?>
+where L.Value: SQLMixedNumeric, L.Value.NonNull: SQLInteger, R.Value == Int? {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt16> where R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt16?> where R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt32> where R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt32?> where R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64> where R.Value == Int64 {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64?> where R.Value == Int64? {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64> where R.Value == Int {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func & <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64?> where R.Value == Int? {
+    Expr(.infix(lhs.sqlNode, "&", rhs.sqlNode))
+}
+
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt16>
+where L.Value == Int16, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt16?>
+where L.Value == Int16?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt32>
+where L.Value == Int32, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt32?>
+where L.Value == Int32?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt64>
+where L.Value == Int64, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt64?>
+where L.Value == Int64?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt64>
+where L.Value == Int, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt64?>
+where L.Value == Int?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.WithInt64>
+where L.Value: SQLMixedNumeric, L.Value.NonNull: SQLInteger, R.Value == Int {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull.WithInt64?>
+where L.Value: SQLMixedNumeric, L.Value.NonNull: SQLInteger, R.Value == Int? {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt16> where R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt16?> where R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt32> where R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt32?> where R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64> where R.Value == Int64 {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64?> where R.Value == Int64? {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64> where R.Value == Int {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func | <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64?> where R.Value == Int? {
+    Expr(.infix(lhs.sqlNode, "|", rhs.sqlNode))
+}
+
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt16>
+where L.Value == Int16, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt16?>
+where L.Value == Int16?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt32>
+where L.Value == Int32, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt32?>
+where L.Value == Int32?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt64>
+where L.Value == Int64, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt64?>
+where L.Value == Int64?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.WithInt64>
+where L.Value == Int, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<R.Value.NonNull.WithInt64?>
+where L.Value == Int?, R.Value: SQLMixedNumeric, R.Value.NonNull: SQLSizedInteger {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.WithInt64>
+where L.Value: SQLMixedNumeric, L.Value.NonNull: SQLInteger, R.Value == Int {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull.WithInt64?>
+where L.Value: SQLMixedNumeric, L.Value.NonNull: SQLInteger, R.Value == Int? {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt16> where R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt16?> where R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt32> where R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt32?> where R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64> where R.Value == Int64 {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64?> where R.Value == Int64? {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64> where R.Value == Int {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+@_disfavoredOverload
+public func ^ <V: SQLSizedInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V.WithInt64?> where R.Value == Int? {
+    Expr(.infix(lhs.sqlNode, "#", rhs.sqlNode))
+}
+
+// MARK: - Bitwise complement and shifts
+
+public prefix func ~ <E: SQLExpression>(expression: E) -> Expr<E.Value> where E.Value.NonNull: SQLInteger {
+    Expr(.sequence([.raw("(~"), expression.sqlNode, .raw(")")]))
+}
+
+// Shifts keep the left operand's type, nullable when either operand is. PostgreSQL's shift count is `integer`, which an
+// `Int16` count widens to but a `bigint` count does not narrow to, so a count is `Int32` or `Int16`. The overload taking
+// a plain `Int32` gives a literal count its type. A same-type requirement per count type, rather than a protocol, makes
+// an `Int64` or `Int` count fail with one error naming the operator.
+
+public func << <L: SQLExpression>(lhs: L, rhs: Int32) -> Expr<L.Value> where L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value.NonNull: SQLInteger, R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value.NonNull: SQLInteger, R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull?>
+where L.Value.NonNull: SQLInteger, R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull?>
+where L.Value.NonNull: SQLInteger, R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V> where R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V?> where R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V> where R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+public func << <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V?> where R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, "<<", rhs.sqlNode))
+}
+
+public func >> <L: SQLExpression>(lhs: L, rhs: Int32) -> Expr<L.Value> where L.Value.NonNull: SQLInteger {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value.NonNull: SQLInteger, R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <L: SQLExpression, R: SQLArgument>(lhs: L, rhs: R) -> Expr<L.Value> where L.Value.NonNull: SQLInteger, R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull?>
+where L.Value.NonNull: SQLInteger, R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <L: SQLExpression, R: SQLExpression>(lhs: L, rhs: R) -> Expr<L.Value.NonNull?>
+where L.Value.NonNull: SQLInteger, R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V> where R.Value == Int32 {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V?> where R.Value == Int32? {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V> where R.Value == Int16 {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}
+public func >> <V: SQLInteger, R: SQLExpression>(lhs: V, rhs: R) -> Expr<V?> where R.Value == Int16? {
+    Expr(.infix(lhs.sqlNode, ">>", rhs.sqlNode))
+}

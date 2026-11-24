@@ -50,6 +50,13 @@ public protocol SQLAdditive: SQLValue {}
 /// Numeric types that support `*` and `/` in SQL expressions.
 public protocol SQLNumeric: SQLAdditive {}
 
+/// Integer types that support bitwise operators in SQL expressions.
+public protocol SQLInteger: SQLNumeric {}
+
+/// `Int16`, `Int32` and `Int64`, the integers whose Swift type names their width. Bitwise operators between integer
+/// types take a plain value only of these, so an untyped literal, which defaults to `Int`, takes the other operand's type.
+public protocol SQLSizedInteger: SQLInteger, SQLMixedNumeric {}
+
 /// A number that arithmetic mixes with numbers of other types, or its optional: the integers, `Float` and `Double`.
 /// Each `With…` is PostgreSQL's result type with an operand of that type, optional when `Self` is; with a `Double`
 /// operand it is `AsDouble`. Swift's `Int` is `bigint`, so it mixes as `Int64`.
@@ -81,14 +88,14 @@ extension Date: SQLTextCastable, SQLCastPartner {
 }
 extension Data: SQLValue { public static var sqlTypeName: String { "bytea" } }
 
-extension Int16: SQLNumeric, SQLMixedNumeric, SQLTextCastable {
+extension Int16: SQLSizedInteger, SQLTextCastable {
     public static var sqlTypeName: String { "smallint" }
     public typealias WithInt16 = Int16
     public typealias WithInt32 = Int32
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Int32: SQLNumeric, SQLMixedNumeric, SQLTextCastable, SQLCastPartner {
+extension Int32: SQLSizedInteger, SQLTextCastable, SQLCastPartner {
     public static var sqlTypeName: String { "integer" }
     public typealias CastPartner = Bool
     public typealias WithInt16 = Int32
@@ -96,14 +103,14 @@ extension Int32: SQLNumeric, SQLMixedNumeric, SQLTextCastable, SQLCastPartner {
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Int64: SQLNumeric, SQLMixedNumeric, SQLTextCastable {
+extension Int64: SQLSizedInteger, SQLTextCastable {
     public static var sqlTypeName: String { "bigint" }
     public typealias WithInt16 = Int64
     public typealias WithInt32 = Int64
     public typealias WithInt64 = Int64
     public typealias WithFloat = Double
 }
-extension Int: SQLNumeric, SQLMixedNumeric, SQLTextCastable {
+extension Int: SQLInteger, SQLMixedNumeric, SQLTextCastable {
     public static var sqlTypeName: String { "bigint" }
     public typealias WithInt16 = Int64
     public typealias WithInt32 = Int64
