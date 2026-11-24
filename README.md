@@ -73,7 +73,8 @@ print(rendered.binds.map(\.description))
 // ["%@example.com"]
 ```
 
-`@Model` generates a static typed column per property (`TodoModel.userID` is a `Column<TodoModel, Int64>`).
+`@Model` generates a static typed column per property (`TodoModel.userID` is a `Column<TodoModel, Int64>`)
+and one entry per relation in `TodoModel.Relations` (`TodoModel.Relations.user.name` is a relation path for filters).
 Column names default to the snake_case property name (`userID` → `user_id`); override with `@ColumnName("type")`.
 Property names starting with `__dbkit_` are reserved for the code `@Model` generates.
 

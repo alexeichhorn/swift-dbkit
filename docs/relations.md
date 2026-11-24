@@ -94,6 +94,28 @@ let filtered: [UserModel] = try await UserModel.query()
     .all(on: db)
 ```
 
+## Relation Column Paths
+
+A belongs-to relation exposes its target's columns: `TodoModel.Relations.user.name`. Using one adds a `LEFT JOIN`
+automatically; `.with(...)` still decides what's loaded.
+
+```swift
+let samsTodos = try await TodoModel.query()
+    .filter(TodoModel.Relations.user.name == "Sam")
+    .orderBy(TodoModel.Relations.user.name.asc)
+    .with(\.user, .joined)
+    .all(on: db)
+```
+
+Paths work in filters, ordering, projections, grouping and `having`, and can walk several belongs-to relations,
+including self-references (`MemberModel.Relations.manager.organization.name`). Repeated uses of a path share one join, which
+also serves a `.joined` load or an explicit `.join(...)` of the same relation. A self-referencing join gets an alias
+like `"members.manager"`.
+
+Path columns are nullable (`Expr<String?>` for a `String` column) because the outer join can find no row, so
+`TodoModel.Relations.user.id.isNull` finds todos without a user. Paths are read-only and only supported in `SELECT` queries;
+to-many relations aren't paths (use `.join(...)` or `whereExists(...)`).
+
 ## Nested Eager Loading
 
 The closure receives the relation and loads relations of its rows; children keep their exact loaded type:
