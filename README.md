@@ -27,6 +27,22 @@ class TodoModel {
 ```
 
 ```swift
+let db = try Database(url: "postgres://app:secret@localhost:5432/app")
+// Run `db` in your ServiceGroup (or a task); see docs/database.md.
+
+let users = try await UserModel.query()
+    .filter(UserModel.email.ilike("%@example.com"))
+    .orderBy(UserModel.name.asc)
+    .all(on: db)
+
+for user in users {
+    print("\(user.name) <\(user.email)>")
+}
+```
+
+Without a database, `render()` shows a query's SQL and binds:
+
+```swift
 let rendered = UserModel.query()
     .filter(UserModel.email.ilike("%@example.com"))
     .orderBy(UserModel.name.asc)
@@ -47,6 +63,7 @@ Comparing a column with a value of another type doesn't compile.
 ## More Docs
 
 - [Querying](docs/querying.md)
+- [Database](docs/database.md)
 
 ## License
 
