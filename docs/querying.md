@@ -33,8 +33,9 @@ let rows = try await todos.all(on: db)
 ```
 
 Comparisons are `==`, `!=`, `<`, `<=`, `>` and `>=` against a value. Other predicates: `.in([...])`, `.notIn([...])`,
-`.between(a, b)`, `.like`, `.ilike`. `in` with an empty array matches nothing, `notIn` with an empty array matches
-everything.
+`.between(a, b)`, `.isNull`, `.isNotNull`, `.like`, `.ilike`. `in` with an empty array matches nothing, `notIn`
+with an empty array matches everything. On a nullable column a predicate is `Expr<Bool?>` and takes optional values;
+see [Nullability](expressions.md#nullability).
 
 Any query can show its SQL without a database: `render()` returns the SQL and binds.
 

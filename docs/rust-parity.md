@@ -58,6 +58,8 @@ Changes to the public API of the kit at `0600cd20`, for code that moves from the
 
 | Change | Reason |
 | --- | --- |
+| Comparisons, `between`, `like`, `ilike`, `in`, `notIn`, `&&`, `\|\|` and `!` return `Expr<Bool?>` when an operand is nullable, instead of `Expr<Bool>`. A predicate stored as `Expr<Bool>`, such as `let isToday: Expr<Bool> = TodoModel.note == "today"`, is now declared `Expr<Bool?>`; `filter` takes both. | A comparison with NULL is NULL, as rust-dbkit types it. Nullable columns also gain ordered comparisons with an optional value and optional arguments to `between`, `like`, `ilike`, `in` and `notIn`. |
+| `??` between two nullable expressions of the same type, such as `email ?? backupEmail`, renders `COALESCE`. | The kit's overloads lost to the standard library's `??`, which returned the left column and dropped the fallback. |
 
 ## Rust Tests Without A Swift Counterpart
 

@@ -58,7 +58,9 @@ print(rendered.binds.map(\.description))
 Column names default to the snake_case property name (`userID` → `user_id`); override with `@ColumnName("type")`.
 Property names starting with `__dbkit_` are reserved for the code `@Model` generates.
 
-Comparing a column with a value of another type doesn't compile.
+Required and nullable columns stay distinct: `nil` and optional values are accepted only where the property is
+optional, and a comparison is nullable when an operand is (`Expr<Bool?>` instead of `Expr<Bool>`). Comparing a column
+with a value of another type doesn't compile.
 
 ## Common Mutations
 
@@ -92,6 +94,7 @@ Use the `update()` / `delete()` builders for bulk or conditional mutations.
 
 - [Querying](docs/querying.md)
 - [Mutations](docs/mutations.md)
+- [Expressions and aggregation](docs/expressions.md)
 - [Postgres types](docs/postgres-types.md)
 - [Database](docs/database.md)
 

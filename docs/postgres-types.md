@@ -24,6 +24,29 @@ written back unchanged. `[Date]` arrays and dates interpolated into raw SQL go t
 A model property of any other type doesn't compile. For other types, conform them to `SQLValue` (PostgresNIO
 encoding plus a type name) or use raw SQL.
 
+## NULL Handling With Optional
+
+```swift
+@Model(table: "nullable_rows")
+class NullableRowModel {
+    @Key @AutoIncrement var id: Int64
+    var note: String?
+}
+```
+
+```swift
+let row = try await NullableRowModel.insert(NullableRowModel.Insert(note: nil)).returningAll().first(on: db)
+let empty = try await NullableRowModel.query().filter(NullableRowModel.note == nil).all(on: db)
+
+// Plain values work on nullable columns, and dynamic optionals compile to `= $1` or `IS NULL`:
+let note: String? = "present"
+let matching = try await NullableRowModel.query().filter(NullableRowModel.note == note).all(on: db)
+try await NullableRowModel.update().set(NullableRowModel.note, to: "updated").execute(on: db)
+```
+
+`nil` and optional values are accepted only for optional properties, in filters, inserts, updates and active models.
+A comparison on a nullable column is an `Expr<Bool?>`; see [Expressions](expressions.md#nullability).
+
 ## JSON And Arrays
 
 ```swift
