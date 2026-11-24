@@ -66,8 +66,9 @@ let rows = try await RecordModel.query()
 let rate = RecordModel.bookmarkCount.cast(to: Double.self) / RecordModel.playCount  // Expr<Double>
 ```
 
-`+`, `-`, `*` and `/` work on integers, floats and `Decimal`. A nullable operand makes the result nullable. Operands
-of different numeric types give PostgreSQL's result type, the same for all four operators:
+`+`, `-`, `*` and `/` work on integers, floats and `Decimal` (`+`/`-` also on `Interval`). A nullable operand makes
+the result nullable. Operands of different numeric types give PostgreSQL's result type, the same for all four
+operators:
 
 | Operands | Result |
 | --- | --- |
@@ -88,7 +89,8 @@ of different numeric types give PostgreSQL's result type, the same for all four 
 nullable one. It accepts the casts PostgreSQL has:
 
 - between `Int16`, `Int32`, `Int64`, `Int`, `Float`, `Double` and `Decimal`
-- from `String` to `Bool`, `UUID`, `Date`, `String` and the numeric types, and from each of these to `String`
+- from `String` to `Bool`, `UUID`, `Date`, `Interval`, `String` and the numeric types, and from each of these to
+  `String`
 - between `Int32` and `Bool`
 - from `Date` to `Date`
 
@@ -141,3 +143,34 @@ combines only with an `Int` expression.
 `~` keeps its operand's type. `<<` and `>>` keep the left operand's type, which may also be a value:
 `Int64(1) << count`. The count is `Int32` or `Int16`, required or nullable, and a literal count is `Int32`.
 PostgreSQL doesn't narrow a `bigint` count, so an `Int64` or `Int` count doesn't compile; `cast(to: Int32.self)` it.
+
+## Interval Expressions
+
+```swift
+@Model(table: "schedules")
+class ScheduleModel {
+    @Key @AutoIncrement var id: Int64
+    var baseIntervalHours: Int32
+    var leaseWindow: Interval
+    var backoffMinutes: Int32?
+    var updatedAt: Date
+}
+```
+
+```swift
+let rows = try await ScheduleModel.query()
+    .filter(SQL.interval(hours: ScheduleModel.baseIntervalHours) == ScheduleModel.leaseWindow)
+    .orderBy(SQL.interval(minutes: ScheduleModel.backoffMinutes ?? 15).asc)
+    .all(on: db)
+
+let expired = try await ScheduleModel.query()
+    .filter(ScheduleModel.updatedAt + ScheduleModel.leaseWindow <= Date())
+    .all(on: db)
+```
+
+`SQL.interval(days:|hours:|minutes:|seconds:)` scales a numeric value or expression, fractions included:
+`SQL.interval(hours: 1.5)` is an hour and a half. Timestamps support `± Interval` values and interval expressions,
+and intervals add to and subtract from each other. A nullable operand makes the result nullable.
+
+An `Interval` value keeps PostgreSQL's months, days and microseconds; `.days(_:)`, `.hours(_:)`, `.minutes(_:)` and
+`.seconds(_:)` build one.

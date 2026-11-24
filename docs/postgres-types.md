@@ -13,6 +13,7 @@ Model properties, filter values, inserts and updates support:
 | `String` | `text`, `varchar` |
 | `UUID` | `uuid` |
 | `Date` | `timestamptz`; also decodes `timestamp` and `date` |
+| `Interval` | `interval` |
 | `Data` | `bytea` |
 | `[Element]` for `Bool`, integers, floats, `String`, `UUID`, `Date` | arrays such as `text[]`, `bigint[]` |
 | `Codable` types conforming to `DatabaseJSON` | `jsonb` |
