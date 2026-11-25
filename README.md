@@ -191,4 +191,4 @@ difference, what is left out and why.
 
 ## License
 
-Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+Licensed under the [MIT license](LICENSE).
