@@ -7,7 +7,7 @@ framework-independent.
 ## Usage
 
 ```swift
-.package(url: "https://github.com/alexeichhorn/swift-dbkit.git", branch: "main"),
+.package(url: "https://github.com/alexeichhorn/swift-dbkit.git", from: "0.1.0"),
 // target dependency:
 .product(name: "DBKit", package: "swift-dbkit"),
 ```

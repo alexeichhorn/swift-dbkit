@@ -10,6 +10,8 @@ Every change lands as commits in this order:
 2. `Implement <feature>` or `Fix <bug>`: the code that turns them green, with the whole suite passing.
 3. `Document <feature>`: its part of `README.md` and `docs/`.
 
+Each feature has its own branch and lands through a pull request.
+
 A committed test changes only when the test itself was wrong. That is its own commit, `Fix test <name>`, and the message says what was wrong.
 
 ## Porting from rust-dbkit
@@ -27,14 +29,6 @@ rust-dbkit's tests are the spec. A ported test keeps its name in camelCase, in a
 Translate what a test checks into Swift's API and keep its cases and edge values. Expected SQL follows this library's rendering: quoted identifiers, `$n` binds.
 
 A Rust test is either ported or listed with its reason in `docs/rust-parity.md`, which also holds the features this port leaves out. `scripts/check-rust-parity.py <path to rust-dbkit>` reports every test that is neither.
-
-## The kit baseline
-
-Until `0.1.0`, the repo is rebuilt from an existing implementation, the kit. Its snapshot is the untracked folder `.reference/kit`.
-
-- Bring its code over as it is. Its public API is the baseline.
-- Change a signature only where `docs/rust-parity.md` names the change, and record the change there under "API changes from the kit".
-- An improvement you notice becomes a GitHub issue.
 
 ## Tests
 
